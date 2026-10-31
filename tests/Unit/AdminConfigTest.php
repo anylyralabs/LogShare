@@ -68,6 +68,20 @@ test('Config saveDynamic updates non-sensitive settings and restores masked secr
     expect(is_file(Config::getDynamicConfigPath()))->toBeTrue();
 });
 
+test('Config load drops legacy ai and github sections', function () {
+    $tmp = CORE_PATH . '/tmp/legacy_config_' . uniqid() . '.php';
+    file_put_contents($tmp, "<?php return ['ai' => ['apiKeys' => ['sk-leaked']], 'github' => ['tokens' => ['ghp_leaked']]];");
+
+    try {
+        Config::load($tmp);
+        expect(Config::all())->not->toHaveKey('ai')->not->toHaveKey('github');
+        expect(Config::getMasked())->not->toHaveKey('ai')->not->toHaveKey('github');
+    } finally {
+        @unlink($tmp);
+        Config::load(CORE_PATH . '/Config.inc.php');
+    }
+});
+
 test('Config resetDynamic removes dynamic overrides', function () {
     Config::saveDynamic([
         'storage' => ['storageTime' => 999999],
