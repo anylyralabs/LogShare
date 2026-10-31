@@ -15,11 +15,10 @@ use App\Controller\RawController;
 use App\Data\Token;
 use App\Log;
 use Hyperf\HttpServer\Contract\RequestInterface;
-use Hyperf\HttpServer\Response;
 use Mockery;
 use ReflectionClass;
 
-function instantiateController(string $class, ?RequestInterface $request = null, ?Response $response = null): object
+function instantiateController(string $class, ?RequestInterface $request = null): object
 {
     $ref = new ReflectionClass($class);
     $instance = $ref->newInstanceWithoutConstructor();
@@ -34,9 +33,6 @@ function instantiateController(string $class, ?RequestInterface $request = null,
 
     $reqProp = $ref->getProperty('request');
     $reqProp->setValue($instance, $request);
-
-    $respProp = $ref->getProperty('response');
-    $respProp->setValue($instance, $response ?? new Response());
 
     return $instance;
 }
@@ -306,45 +302,4 @@ test('AnalyseController parses content and returns analysis json', function () {
     expect((string) $resp->getBody())->not->toBeEmpty();
     $body = json_decode((string) $resp->getBody(), true);
     expect($body)->toBeArray();
-});
-
-test('AIController throws 404 when AI is disabled or log not found', function () {
-    $allConfig = $this->dataProp->getValue();
-    $allConfig['ai']['enabled'] = false;
-    $this->dataProp->setValue(null, $allConfig);
-
-    $controller = instantiateController(\App\Controller\AIController::class);
-    expect(fn() => $controller->ai('f000000'))->toThrow(ApiError::class);
-
-    $allConfig['ai']['enabled'] = true;
-    $this->dataProp->setValue(null, $allConfig);
-    expect(fn() => $controller->ai('f000000'))->toThrow(ApiError::class);
-});
-
-test('AIAnalyseController throws 404 when disabled or validates log and content', function () {
-    $allConfig = $this->dataProp->getValue();
-    $allConfig['ai']['enabled'] = false;
-    $this->dataProp->setValue(null, $allConfig);
-
-    $mockReq = Mockery::mock(RequestInterface::class);
-    $controller = instantiateController(\App\Controller\AIAnalyseController::class, $mockReq);
-    expect(fn() => $controller->analyse())->toThrow(ApiError::class);
-
-    $allConfig['ai']['enabled'] = true;
-    $this->dataProp->setValue(null, $allConfig);
-
-    $payload = json_encode(['id' => 'invalid!id']);
-    $mockStream = Mockery::mock(\Psr\Http\Message\StreamInterface::class);
-    $mockStream->shouldReceive('getContents')->andReturn($payload);
-    $mockStream->shouldReceive('__toString')->andReturn($payload);
-
-    $mockReq2 = Mockery::mock(RequestInterface::class);
-    $mockReq2->shouldReceive('getParsedBody')->andReturn(['id' => 'invalid!id']);
-    $mockReq2->shouldReceive('getHeaderLine')->with('Content-Type')->andReturn('application/json');
-    $mockReq2->shouldReceive('getHeaderLine')->with('Content-Encoding')->andReturn('');
-    $mockReq2->shouldReceive('getUploadedFiles')->andReturn([]);
-    $mockReq2->shouldReceive('getBody')->andReturn($mockStream);
-
-    $controller2 = instantiateController(\App\Controller\AIAnalyseController::class, $mockReq2);
-    expect(fn() => $controller2->analyse())->toThrow(ApiError::class);
 });

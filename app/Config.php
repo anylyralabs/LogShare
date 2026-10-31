@@ -42,6 +42,8 @@ class Config
 
         self::applyEnvironmentOverrides($data);
         self::applyDynamicOverrides($data);
+        // AI/Agent/RAG 已移除：旧 Config.inc.php 或动态配置中的密钥不得再暴露
+        unset($data['ai'], $data['github']);
         // Example 配置中的占位符（如 '${REDIS_PASSWORD}'）在非 Docker 部署下不会
         // 被替换，占位符形态一律视为未配置，避免拿字面量去 AUTH Redis
         if (isset($data['cache']['redis']['password'])
@@ -68,10 +70,6 @@ class Config
      *  - REDIS_PORT         → cache.redis.port
      *  - REDIS_TIMEOUT      → cache.redis.timeout
      *  - REDIS_PASSWORD     → cache.redis.password
-     *  - AI_API_KEYS        → ai.apiKeys (comma-separated)
-     *  - AI_BASE_URL        → ai.baseUrl
-     *  - AI_MODEL           → ai.model
-     *  - AI_ENABLED         → ai.enabled (1/true/on/yes = true)
      *
      * @param array $data Config array by reference
      * @return void
@@ -93,28 +91,6 @@ class Config
         if (($password = getenv('REDIS_PASSWORD')) !== false && $password !== '') {
             $data['cache']['redis']['password'] = $password;
         }
-        if ($keys = getenv('AI_API_KEYS')) {
-            $data['ai']['apiKeys'] = array_values(array_filter(array_map('trim', explode(',', $keys)), fn($k) => $k !== ''));
-        }
-        if ($baseUrl = getenv('AI_BASE_URL')) {
-            $data['ai']['baseUrl'] = $baseUrl;
-        }
-        if ($model = getenv('AI_MODEL')) {
-            $data['ai']['model'] = $model;
-        }
-        if (($enabled = getenv('AI_ENABLED')) !== false) {
-            $data['ai']['enabled'] = in_array(strtolower($enabled), ['1', 'true', 'on', 'yes'], true);
-        }
-        if (($customHeaders = getenv('AI_HEADERS')) !== false && $customHeaders !== '') {
-            $decoded = json_decode($customHeaders, true);
-            if (is_array($decoded)) {
-                $data['ai']['headers'] = $decoded;
-            }
-        }
-        if (empty($data['ai']['apiKeys']) || !$data['ai']['enabled']) {
-            $data['ai']['enabled'] = false;
-        }
-
         if (($adminEnabled = getenv('ADMIN_ENABLED')) !== false) {
             $data['admin']['enabled'] = in_array(strtolower($adminEnabled), ['1', 'true', 'on', 'yes'], true);
         }
@@ -122,33 +98,6 @@ class Config
             $data['admin']['token'] = $adminToken;
         }
 
-        // GitHub 排障工具配置覆盖
-        if (!isset($data['github']) || !is_array($data['github'])) {
-            $data['github'] = [];
-        }
-        if (($ghEnabled = getenv('GITHUB_ENABLED')) !== false) {
-            $data['github']['enabled'] = in_array(strtolower($ghEnabled), ['1', 'true', 'on', 'yes'], true);
-        }
-        if ($ghTokens = getenv('GITHUB_TOKENS')) {
-            $data['github']['tokens'] = array_values(array_filter(array_map('trim', explode(',', $ghTokens)), fn($k) => $k !== ''));
-        } elseif ($ghToken = getenv('GITHUB_TOKEN')) {
-            $data['github']['tokens'] = [$ghToken];
-        }
-        if ($ghProxy = getenv('GITHUB_PROXY')) {
-            $data['github']['proxy'] = $ghProxy;
-        }
-        if (($ghCacheTtl = getenv('GITHUB_CACHE_TTL')) !== false && ctype_digit($ghCacheTtl)) {
-            $data['github']['cache_ttl'] = (int) $ghCacheTtl;
-        }
-        // 若配置了旧版单个 token 则归一化进 tokens 列表
-        if (isset($data['github']['token']) && is_string($data['github']['token']) && $data['github']['token'] !== '') {
-            if (!isset($data['github']['tokens']) || !is_array($data['github']['tokens'])) {
-                $data['github']['tokens'] = [];
-            }
-            if (!in_array($data['github']['token'], $data['github']['tokens'], true)) {
-                array_unshift($data['github']['tokens'], $data['github']['token']);
-            }
-        }
     }
 
     private static function validate(array $data): void
@@ -165,30 +114,10 @@ class Config
             throw new \InvalidArgumentException('cache.redis host and port are required');
         }
 
-        $ai = $data['ai'] ?? [];
-        if (($ai['enabled'] ?? false) === true) {
-            if (empty($ai['apiKeys']) || !is_array($ai['apiKeys'])) {
-                throw new \InvalidArgumentException('AI_API_KEYS is required when AI is enabled');
-            }
-            if (!filter_var($ai['baseUrl'] ?? '', FILTER_VALIDATE_URL) || ($ai['model'] ?? '') === '') {
-                throw new \InvalidArgumentException('AI_BASE_URL and AI_MODEL are required when AI is enabled');
-            }
-        }
-
         $admin = $data['admin'] ?? [];
         if (($admin['enabled'] ?? false) === true) {
             if (empty($admin['token']) || !is_string($admin['token'])) {
                 throw new \InvalidArgumentException('admin.token is required when admin is enabled');
-            }
-        }
-
-        $github = $data['github'] ?? [];
-        if (($github['enabled'] ?? false) === true) {
-            if (isset($github['tokens']) && !is_array($github['tokens'])) {
-                throw new \InvalidArgumentException('github.tokens must be an array');
-            }
-            if (isset($github['timeout']) && ((int) $github['timeout'] <= 0)) {
-                throw new \InvalidArgumentException('github.timeout must be greater than zero');
             }
         }
 
@@ -344,14 +273,11 @@ class Config
             }
             $data = self::deepMerge($data, $decoded);
             $explicitKeys = [
-                ['ai', 'headers'],
                 ['security', 'contentRules'],
                 ['security', 'ipBans'],
                 ['security', 'trustedProxies'],
                 ['rateLimit', 'routes'],
                 ['rateLimit', 'trustedProxies'],
-                ['github', 'tokens'],
-                ['github', 'repos'],
                 ['filter', 'pre'],
             ];
             foreach ($explicitKeys as [$section, $field]) {
@@ -370,40 +296,11 @@ class Config
      */
     private static function restoreMaskedSecrets(array &$updates, array $original): void
     {
-        // 1. ai.apiKeys
-        if (isset($updates['ai']['apiKeys']) && is_array($updates['ai']['apiKeys'])) {
-            $origKeys = $original['ai']['apiKeys'] ?? [];
-            $restoredKeys = [];
-            foreach ($updates['ai']['apiKeys'] as $idx => $key) {
-                $key = trim((string) $key);
-                if ($key === '') {
-                    continue;
-                }
-                if (str_contains($key, '****') || $key === '********') {
-                    $matched = false;
-                    foreach ($origKeys as $orig) {
-                        if (self::maskSecret($orig) === $key) {
-                            $restoredKeys[] = $orig;
-                            $matched = true;
-                            break;
-                        }
-                    }
-                    if (!$matched && isset($origKeys[$idx])) {
-                        $restoredKeys[] = $origKeys[$idx];
-                    }
-                } else {
-                    $restoredKeys[] = $key;
-                }
-            }
-            $updates['ai']['apiKeys'] = $restoredKeys;
-        }
-
-        // 2. Scalar secret fields
+        // Scalar secret fields
         $secretFields = [
             ['admin', 'token'],
             ['cache', 'redis', 'password'],
             ['storage', 'mariadb', 'password'],
-            ['github', 'token'],
         ];
         foreach ($secretFields as $path) {
             $curr = &$updates;
@@ -423,47 +320,6 @@ class Config
                 }
             }
             unset($curr);
-        }
-        // 4. ai.headers
-        if (isset($updates['ai']['headers']) && is_array($updates['ai']['headers'])) {
-            $origHeaders = $original['ai']['headers'] ?? [];
-            foreach ($updates['ai']['headers'] as $hKey => $hVal) {
-                if (is_string($hVal) && (str_contains($hVal, '****') || $hVal === '******' || $hVal === '********')) {
-                    if (isset($origHeaders[$hKey]) && is_string($origHeaders[$hKey])) {
-                        $updates['ai']['headers'][$hKey] = $origHeaders[$hKey];
-                    }
-                }
-            }
-        }
-        // 5. github.tokens
-        if (isset($updates['github']['tokens']) && is_array($updates['github']['tokens'])) {
-            $origTokens = $original['github']['tokens'] ?? [];
-            if (isset($original['github']['token']) && is_string($original['github']['token']) && $original['github']['token'] !== '') {
-                $origTokens[] = $original['github']['token'];
-            }
-            $restoredTokens = [];
-            foreach ($updates['github']['tokens'] as $idx => $token) {
-                $token = trim((string) $token);
-                if ($token === '') {
-                    continue;
-                }
-                if (str_contains($token, '****') || $token === '******' || $token === '********') {
-                    $matched = false;
-                    foreach ($origTokens as $orig) {
-                        if (self::maskSecret($orig) === $token) {
-                            $restoredTokens[] = $orig;
-                            $matched = true;
-                            break;
-                        }
-                    }
-                    if (!$matched && isset($origTokens[$idx])) {
-                        $restoredTokens[] = $origTokens[$idx];
-                    }
-                } else {
-                    $restoredTokens[] = $token;
-                }
-            }
-            $updates['github']['tokens'] = $restoredTokens;
         }
     }
 
@@ -487,26 +343,6 @@ class Config
         if (isset($masked['storage']['mariadb']['password']) && (string) $masked['storage']['mariadb']['password'] !== '') {
             $masked['storage']['mariadb']['password'] = '******';
         }
-        if (isset($masked['github']['token']) && (string) $masked['github']['token'] !== '') {
-            $masked['github']['token'] = self::maskSecret((string) $masked['github']['token']);
-        }
-        if (isset($masked['github']['tokens']) && is_array($masked['github']['tokens'])) {
-            $masked['github']['tokens'] = array_map(fn($t) => self::maskSecret((string) $t), $masked['github']['tokens']);
-        }
-        if (isset($masked['ai']['apiKeys']) && is_array($masked['ai']['apiKeys'])) {
-            $masked['ai']['apiKeys'] = array_map(fn($k) => self::maskSecret((string) $k), $masked['ai']['apiKeys']);
-        }
-        if (isset($masked['ai']['headers']) && is_array($masked['ai']['headers'])) {
-            foreach ($masked['ai']['headers'] as $hKey => &$hVal) {
-                if (is_string($hVal) && is_string($hKey)) {
-                    $lower = strtolower($hKey);
-                    if (str_contains($lower, 'token') || str_contains($lower, 'auth') || str_contains($lower, 'key') || str_contains($lower, 'secret')) {
-                        $hVal = self::maskSecret($hVal);
-                    }
-                }
-            }
-            unset($hVal);
-        }
         if (isset($masked['security']['contentRules']['keywords']) && is_array($masked['security']['contentRules']['keywords'])) {
             $masked['security']['contentRules']['keywords'] = \App\System\SecurityService::decryptRulesList($masked['security']['contentRules']['keywords']);
         }
@@ -525,22 +361,19 @@ class Config
     public static function saveDynamic(array $updates): void
     {
         self::ensureFresh();
+        unset($updates['ai'], $updates['github']);
         if (isset($updates['_meta'])) {
             unset($updates['_meta']);
         }
         self::restoreMaskedSecrets($updates, self::$data);
 
         $explicitKeys = [
-            ['ai', 'headers'],
             ['security', 'contentRules'],
             ['security', 'ipBans'],
             ['security', 'trustedProxies'],
             ['rateLimit', 'routes'],
             ['rateLimit', 'trustedProxies'],
-            ['github', 'tokens'],
-            ['github', 'repos'],
             ['filter', 'pre'],
-            ['ai', 'agent'],
         ];
 
         $candidate = self::deepMerge(self::$data, $updates);

@@ -250,7 +250,6 @@ test('LogController upload delegates audit and deobfuscation to EventQueue', fun
     /** @var LogController $controller */
     $controller = $ref->newInstanceWithoutConstructor();
     $ref->getProperty('request')->setValue($controller, $mockReq);
-    $ref->getProperty('response')->setValue($controller, new \Hyperf\HttpServer\Response());
 
     $res = $controller->create();
     expect($res->getStatusCode())->toBe(200);
@@ -275,7 +274,6 @@ test('AdminController event queue endpoints provide stats and management', funct
     /** @var AdminController $controller */
     $controller = $ref->newInstanceWithoutConstructor();
     $ref->getProperty('request')->setValue($controller, $mockReq);
-    $ref->getProperty('response')->setValue($controller, new \Hyperf\HttpServer\Response());
 
     $statsRes = $controller->getEventQueueStats();
     expect($statsRes->getStatusCode())->toBe(200);

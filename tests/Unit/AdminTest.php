@@ -180,7 +180,7 @@ test('AdminController getLog and deleteLogs work properly', function () {
     expect(fn() => $controller->getLog($id->get()))->toThrow(ApiError::class);
 });
 
-test('AdminController system stats and queue status', function () {
+test('AdminController system stats', function () {
     $controller = new AdminController();
     $psr7Req = new Request('GET', '/v1/admin/system/stats');
     \Hyperf\Context\Context::set(\Psr\Http\Message\ServerRequestInterface::class, $psr7Req);
@@ -192,9 +192,4 @@ test('AdminController system stats and queue status', function () {
     $stats = json_decode((string) $statsResp->getBody(), true);
     expect($stats['version'])->toBe(\App\Version::VERSION);
     expect($stats['storageBackend'])->toBe('f');
-
-    $queueResp = $controller->getQueueStatus();
-    expect($queueResp->getStatusCode())->toBe(200);
-    $queue = json_decode((string) $queueResp->getBody(), true);
-    expect($queue)->toHaveKeys(['enabled', 'depth', 'maxQueue']);
 });

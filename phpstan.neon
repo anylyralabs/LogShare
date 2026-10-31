@@ -14,14 +14,3 @@ parameters:
     # while detect() returns the base LogInterface. Runtime classes implement both.
     - message: '#Call to an undefined method Aternos\\Codex\\Log\\Log::analyse#'
       path: app/Log.php
-    # Hyperf\Response::getConnection() is dispatched via __call to the underlying
-    # Swoole response; withHeader() chains narrow the inferred type to
-    # ResponseInterface, so both shapes are ignored.
-    - message: '#Call to an undefined method (Hyperf\\HttpServer\\Response|Psr\\Http\\Message\\ResponseInterface)::getConnection\(\)#'
-      path: app/Sse/SseWriter.php
-    # LogAgent 保留的一组私有薄委托是「反射兼容壳」：analyze() 已下沉到
-    # AgentRuntime，但既有 40+ 反射测试仍按旧签名直接调用 buildTools /
-    # buildMessages / executeTool 等，删除即破坏 SSE 逐帧一致验收的门禁。
-    # PHPStan 因生产路径不再引用而报 method.unused，属预期，整体忽略该文件。
-    - identifier: method.unused
-      path: app/Agent/LogAgent.php

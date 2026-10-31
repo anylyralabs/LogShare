@@ -184,7 +184,7 @@ test('SecurityService resolveClientIp handles trusted reverse proxies and preven
     expect($ipSpoof)->toBe('198.51.100.99');
 });
 
-test('LogController, AnalyseController and AIAnalyseController enforce IP ban and content rules', function () {
+test('LogController and AnalyseController enforce IP ban and content rules', function () {
     $bannedIp = '203.0.113.77';
     SecurityService::banIp($bannedIp, 3600, 'Test ban');
 
@@ -205,7 +205,6 @@ test('LogController, AnalyseController and AIAnalyseController enforce IP ban an
     $refLog = new ReflectionClass(LogController::class);
     $logController = $refLog->newInstanceWithoutConstructor();
     $refLog->getProperty('request')->setValue($logController, $bannedReq);
-    $refLog->getProperty('response')->setValue($logController, new \Hyperf\HttpServer\Response());
 
     try {
         $logController->create();
@@ -239,7 +238,6 @@ test('LogController, AnalyseController and AIAnalyseController enforce IP ban an
 
     $badContentCtrl = $refLog->newInstanceWithoutConstructor();
     $refLog->getProperty('request')->setValue($badContentCtrl, $badContentReq);
-    $refLog->getProperty('response')->setValue($badContentCtrl, new \Hyperf\HttpServer\Response());
 
     try {
         $badContentCtrl->create();
@@ -253,7 +251,6 @@ test('LogController, AnalyseController and AIAnalyseController enforce IP ban an
     $refAnalyse = new ReflectionClass(\App\Controller\AnalyseController::class);
     $analyseCtrl = $refAnalyse->newInstanceWithoutConstructor();
     $refAnalyse->getProperty('request')->setValue($analyseCtrl, $badContentReq);
-    $refAnalyse->getProperty('response')->setValue($analyseCtrl, new \Hyperf\HttpServer\Response());
 
     try {
         $analyseCtrl->analyse();
@@ -263,22 +260,4 @@ test('LogController, AnalyseController and AIAnalyseController enforce IP ban an
         expect($e->getMessage())->toContain('prohibited keyword');
     }
 
-    // 4. AIAnalyseController 违规内容拦截
-    $cfg = Config::all();
-    $cfg['ai']['enabled'] = true;
-    $cfg['ai']['apiKeys'] = ['sk-test'];
-    $this->dataProp->setValue(null, $cfg);
-
-    $refAi = new ReflectionClass(\App\Controller\AIAnalyseController::class);
-    $aiCtrl = $refAi->newInstanceWithoutConstructor();
-    $refAi->getProperty('request')->setValue($aiCtrl, $badContentReq);
-    $refAi->getProperty('response')->setValue($aiCtrl, new \Hyperf\HttpServer\Response());
-
-    try {
-        $aiCtrl->analyse();
-        test()->fail('Expected ApiError 400 was not thrown in AIAnalyseController');
-    } catch (ApiError $e) {
-        expect($e->getCode())->toBe(400);
-        expect($e->getMessage())->toContain('prohibited keyword');
-    }
 });
