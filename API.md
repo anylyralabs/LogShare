@@ -10,7 +10,7 @@
 
 ## 快速接入
 
-接入「日志上传 + AI 分析」的最小流程：
+接入「日志上传 + 结构化解析」的最小流程：
 
 ```bash
 # 1. 上传日志（source 填启动器名/版本，用于匹配对应生态的知识库）
@@ -22,24 +22,20 @@ curl -X POST https://api.logshare.cn/v1/log \
 # 2. 获取原始日志或结构化解析（可选）
 curl https://api.logshare.cn/v1/raw/sAbCdEf          # 日志原文
 curl https://api.logshare.cn/v1/insights/sAbCdEf     # Codex 结构化分析
-
-# 3. AI 深度分析（SSE 流式，读超时建议 ≥300s）
-curl -N https://api.logshare.cn/v1/ai/sAbCdEf
 ```
 
 接入时需要注意以下几点：
 
 - 上传响应中的 `token` 是删除日志的唯一凭证，丢失后无法找回，请自行持久化保存。
-- `source` 字段建议填写启动器名与版本（如 `fcl/1.2.0`）。知识库收录了 Pojav、FCL、ZL2、Amethyst、PGW、MobileGlues 等启动器生态的问题案例，该字段用于让 AI 分析优先匹配对应来源的案例。
-- AI 分析使用 SSE 流式协议，解析方式见「SSE 事件协议」一节，注意 `event:` 行与 `data:` 行的配对关系。
+- `source` 字段建议填写启动器名与版本（如 `fcl/1.2.0`），便于日志来源统计与后续外部诊断服务关联。
 - 全链路默认采用 Brotli（`br`）压缩：移动端与各客户端默认推荐开启 Brotli 压缩上传（`Content-Encoding: br`，亦向下兼容 gzip）；服务端出站响应全链路默认采用 Brotli（`br`）压缩返回。
-- 客户端 HTTP 读超时应设置为 300 秒以上，Agent 的多轮工具分析可能持续数十秒。
+- AI 智能诊断已由外部服务提供，本仓库不再暴露 `/v1/ai/*` 与 `/rag` 端点。
 
 ---
 
 ## 客户端接入规范
 
-为确保 AI 诊断引擎与技术支持社区能够全面洞察异常根因，启动器或客户端接入时应遵循以下规范：
+为便于日志分享、结构化解析与后续外部诊断服务定位问题，启动器或客户端接入时应遵循以下规范：
 
 1. **尽可能完整上传「游戏主日志 + 崩溃报告 + 启动器日志」**：
    - 游戏闪退或报错往往源于 Java 虚拟机配置、移动端渲染器组件（如 Zink / Turnip / Holy GL4ES）、本地原生动态库或启动参数异常，单传游戏日志易产生诊断盲区。
@@ -50,7 +46,7 @@ curl -N https://api.logshare.cn/v1/ai/sAbCdEf
    - 建议通过 `files` 数组或 ZIP 压缩包一次性提交，服务端会自动保留相对路径并构建完整的多文件预览面板。
 2. **上传时务必注明来源标识（`source` 字段）**：
    - 上传请求体中须尽量携带 `source` 参数，推荐格式为 `启动器标识/版本号`（例如 `pojav-glow-worm/3.4.0`、`fcl/1.2.0`、`zl2/2.1.0`、`amcl/1.0.0` 等）。
-   - LogShare 针对不同启动器生态组织了专有案例知识库，注明来源标识有助于 AI 分析精准匹配针对性解决方案。
+   - 注明来源标识有助于按启动器生态统计与分发日志。
 3. **保留删除凭证与分享直达**：
    - 上传成功后持久化保存返回的 `token`，并在客户端界面提供分享链接（`url`）的一键复制或外跳功能。
 
@@ -76,7 +72,7 @@ POST /v1/log
 | `content` | string | 是* | 日志内容（多文件上传时可为空，见下） |
 | `files` | array | 否 | 附加文件数组，每个元素 `{name, content}` |
 | `metadata[]` | array | 否 | 元数据，每项 `{key, value, label?, visible?}`；`value` 为字符串时直接存储，其他类型会 JSON 序列化；单项最长 value 1024 / label 128 / key 64 字符。服务端会在落库前用日志识别结果自动补写 `version`（Minecraft 版本）与 `loader`（fabric / neoforge / forge / vanilla 等）两项元数据，客户端已提交同名键时以客户端值为准，不受影响；补写项的 `label` 固定为 `Minecraft 版本` 与 `模组加载器`，`visible` 为默认 true |
-| `source` | string | 否 | 来源标识（最长 64 字符），建议填写，格式如 `fcl/1.2.0`、`pojavlauncher/3.4.1`。知识库按启动器生态组织了问题案例（FCL/ZL2/PGW/Amethyst/MobileGlues），该字段用于让 AI 分析优先匹配对应来源的案例 |
+| `source` | string | 否 | 来源标识（最长 64 字符），建议填写，格式如 `fcl/1.2.0`、`pojavlauncher/3.4.1`。该字段用于按启动器生态统计与分发日志 |
 
 \* 当提供 `files` 时 `content` 可省略，主文件取 `files[0]`。
 
@@ -245,259 +241,6 @@ POST /v1/analyse
 ```
 
 与 `GET /insights/{id}` 类似，但直接从请求体取内容而非读取已存储日志。请求格式同 `POST /log`。返回 Codex 结构化分析结果（结构同上「获取分析结果」）。
-
----
-
-## AI 分析
-
-> **推荐的使用方式：** 先调用 `GET /v1/insights/{id}` 展示结构化错误摘要（该接口不消耗 AI 资源），再在用户主动触发时调用 `GET /v1/ai/{id}` 进行流式分析。这样可以避免为每次页面展示都执行一次 AI 分析。
-
-> **禁用开关**：配置 `ai.enabled = false`（或环境变量 `AI_ENABLED=false`）时，所有 `/v1/ai/*` 接口统一返回 HTTP 404（`{"success":false,"error":"AI analysis is disabled.","code":404}`）。默认 `true` 启用。
-
-当配置 `ai.agent.enabled` 为 `true` 时，AI 接口走 LogAgent（模型驱动工具循环）；否则保持旧版直连分析。当配置 `ai.queue.enabled` 为 `true` 时，分析经 Redis Streams 微队列执行（并发与排队深度可配置），SSE 事件协议不变；详见「SSE 事件协议」下的队列模式说明。
-
-### 基于已存储日志
-
-```
-GET /1/ai/{id}   （已弃用，保留兼容）
-GET /v1/ai/{id}
-```
-
-SSE（Server-Sent Events）流式输出。LogAgent 模式下，Agent 可读取该日志 ID 下的所有文件（`list_log_files` / `read_log_file` / `grep_log_file` 工具，作用域限定在当前 ID）。`GET /v1/ai/{id}` 会绑定该 ID；`POST /v1/ai/analyse` 只有请求 JSON 提供 `id` 时才会开放文件工具。
-
-> **缓存行为：** `GET /v1/ai/{id}` 的分析结论按日志 ID 缓存 30 分钟——同一 ID 重复请求会直接返回上次结论（不再执行工具调用）；调试时如需强制重新分析，重新上传一份新日志即可。
-
-### 直接提交内容
-
-```
-POST /1/ai/analyse   （已弃用，保留兼容）
-POST /v1/ai/analyse
-```
-
-不落盘，直接提交内容给 AI 分析。请求格式同 `POST /log`。SSE 流式输出，缓存基于内容哈希（30 分钟 TTL）。
-
-> **脱敏差异：** 已存储日志的分析路径（`/v1/ai/{id}`）读取的是上传时经过 `filter.pre` 脱敏过滤链处理后的内容；而本端点直传的内容**不经过**脱敏链，原文会直接发送给 AI 网关。用户提交含敏感信息（token、IP 等）的日志时，请自行确认可接受该差异，或先走 `POST /v1/log` 再分析。
-
-**可选字段 `id`：** 传入已存在的日志 ID 时，Agent 获得该日志文件的访问权（会话作用域），可用于多文件对比；`content` 可省略（缺省读取该 ID 主文件）。缓存键基于该 ID。
-
-```json
-{
-    "content": "可选，附加分析内容",
-    "id": "sAbCdEf"
-}
-```
-
-### SSE 事件协议
-
-LogAgent 模式（`ai.agent.enabled`）会输出额外的 `event: status` 事件，旧的 `data:`（正文增量）与 `event: done` 保持不变，兼容只读旧协议的客户端。
-
-| 事件 | 载荷 `data` | 说明 |
-|------|-------------|------|
-| `event: status` | `{"type":"queued","position":N}` | 仅队列模式（`ai.queue.enabled`）：任务已入队，`position` 为入队时的近似队列深度 |
-| `event: status` | `{"type":"thinking","delta":"..."}` | 模型思维链（reasoning_content）逐段推送，供前端展示 |
-| `event: status` | `{"type":"tool","name":"web_search_exa","arguments":{...}}` | 即将调用某工具 |
-| `event: status` | `{"type":"tool_result","name":"web_search_exa","summary":"...","truncated":true}` | 工具返回摘要（完整结果进 LLM 上下文） |
-| `event: status` | `{"type":"limit","rounds":3}` | 达到工具循环上限（默认 50 轮） |
-| `data:`（原有） | `{"choices":[{"delta":{"content":"..."}}]}` | 正文增量（OpenAI 兼容格式） |
-| `event: error` | `{"error":"..."}` | 流异常终止（排队超时、队列故障或上游异常） |
-| `event: done` | `{"status":"completed"}` | 流正常结束 |
-
-**队列模式（`ai.queue.enabled`）：** 全部 AI 分析经 Redis Streams 微队列执行，端点本身只做 SSE 中继，事件协议不变（仅多首帧 `queued`）。三个行为差异：① 队列已满（深度达 `ai.queue.maxQueue`）时，在 SSE 开始前返回 `429` JSON（带 `Retry-After: 30`）；② 客户端断开不取消任务，分析继续跑完并写入结果缓存，后续请求（含缓存命中路径）直接取用；③ Redis 不可用时按 `ai.queue.failOpen` 回退请求内直连执行（默认回退），行为与队列关闭时一致。中继端最长等待 `ai.queue.waitTimeout` 秒，超时以 `event: error` 收尾。
-
-**前端 SSE 解析注意事项：** 一个 SSE 事件以空行（`\n\n`）结束；`event: status` 后紧跟其 `data:` JSON，未声明 `event:` 的 `data:` 行是正文增量。正文应拼接 `data.choices[0].delta.content`，思考内容拼接 `data.delta`。除 `done` 外还需处理 `event: error`（`data.error`）和 `event: status` 的 `tool`、`tool_result`、`limit`。
-**可注册的工具：** 工具会作为 OpenAI-compatible `tools` 字段发送给模型；只有满足注册条件时才会出现在该次会话中。工具调用过程本身不会作为客户端请求发送，前端只接收对应的 SSE 状态事件。
-
-| 工具 | 注册条件 | 参数 | 返回给模型的内容 |
-|------|----------|------|------------------|
-| `web_search_exa` | `ai.mcp.webSearch.url` 非空 | `query: string`（必填，错误类名、报错关键词或 mod 名称） | Exa MCP 文本搜索结果，多个文本块以空行拼接 |
-| `rag_search` | `ai.mcp.rag.url` 非空 | `query: string`（必填）；`topic: string`（可选，限定主题目录内检索）；`k: number`（可选，默认 5，服务端限制 1–20） | SQLite FTS5/BM25 知识库结果，包含标题、来源、片段和分数 |
-| `list_topics` | `ai.mcp.rag.url` 非空 | 无参数，`properties: {}` | 知识库主题地图：目录、描述、文档数量和示例文件名 |
-| `list_log_files` | 当前会话绑定日志 ID | 无参数，`properties: {}` | 主文件 `main` 及附加文件的名称、字节数、行数（crash-reports 类文件置顶并标注 `[优先]`） |
-| `read_log_file` | 当前会话绑定日志 ID | `filename: string`（必填） | 返回该文件的**完整内容**（无行区间参数）；单次字节上限由 `ai.agent.maxFileBytes` 控制（默认 512 KiB），超出时截断并附提示；同一会话内重复读取同一文件会被拒绝并返回提示 |
-| `grep_log_file` | 当前会话绑定日志 ID | `query: string`（必填，关键词或短语）；`filename: string`（可选，默认 `main`）；`case_sensitive: boolean`（可选，默认 false）；`context_lines: integer`（可选，默认 1，范围 0–5）；`max_matches: integer`（可选，默认 10，范围 1–30） | 逐行检索匹配行，返回带有行号对齐、匹配标记（`>`）与前后上下文的文本块；连续行区间自动合并；超出上限提示截断 |
-
-### 工具定义示例
-
-```json
-[
-  {"type":"function","function":{"name":"web_search_exa","description":"搜索互联网，查找知识库未覆盖的公开问题：新版本 mod/服务端兼容性、小众报错、官方公告等。知识库检索无果后再使用；查询词与 rag_search 相同，使用错误类名或报错关键词原文。","parameters":{"type":"object","properties":{"query":{"type":"string","description":"搜索关键词，使用错误类名或报错关键词原文"}},"required":["query"]}}},
-  {"type":"function","function":{"name":"rag_search","description":"在内置知识库中检索已验证的实战资料。知识库覆盖：常见崩溃与故障模式（mixin 注入失败、内存不足、Java 版本错误等）、移动端启动器生态实战案例蒸馏（FCL/Zalith/Amethyst/PGW/MobileGlues，含排障决策树）、三大日志文件格式解读、Fabric/Forge/NeoForge 与 PaperMC/Purpur/Geyser 等开发文档。日志中出现异常类名、崩溃特征或启动器相关问题时优先使用；纯常识问题不必使用。返回带来源路径的文档片段，多数条目按「签名-含义-解决方案」组织。","parameters":{"type":"object","properties":{"query":{"type":"string","description":"检索词。直接使用日志中的原文信号：英文异常类名或错误串（如 MixinApplyError、SIGSEGV、OutOfMemoryError），或中文症状关键词（如 内存不足、启动闪退）。不要翻译或改写异常类名。"},"topic":{"type":"string","description":"可选。限定在某个主题目录内检索（目录名来自 list_topics 的主题地图），如 \"patterns\"、\"日志分析\"。省略则全库检索。"},"k":{"type":"number","description":"返回片段数量，默认 5"}},"required":["query"]}}},
-  {"type":"function","function":{"name":"list_topics","description":"列出内置知识库的主题地图（目录、说明与内容样本）。不确定检索方向、或 rag_search 连续无结果时调用；看完地图后应带着明确目标词去 rag_search（可配合 topic 参数定向），不要看完地图就停止分析。","parameters":{"type":"object","properties":{}}}},
-  {"type":"function","function":{"name":"list_log_files","description":"列出当前日志 ID 下的所有文件（含主文件与附加文件）。","parameters":{"type":"object","properties":{}}}},
-  {"type":"function","function":{"name":"read_log_file","description":"读取当前日志下指定文件的内容。默认返回完整文件；需要控制范围时可使用 line_start/line_end 指定行区间，或使用 offset/max_bytes 指定字节区间。主文件名为 main。","parameters":{"type":"object","properties":{"filename":{"type":"string","description":"文件名（主文件为 main，或使用 list_log_files 列出的名称）"},"line_start":{"type":"integer","description":"起始行号，从 1 开始；省略则从第 1 行开始"},"line_end":{"type":"integer","description":"结束行号，包含该行；省略则读取到文件末尾"},"offset":{"type":"integer","description":"字节起始位置；使用行区间时不要设置"},"max_bytes":{"type":"integer","description":"字节读取模式下的最大字节数；使用行区间时不要设置"}},"required":["filename"]}}},
-  {"type":"function","function":{"name":"grep_log_file","description":"在当前日志的指定文件中按关键词逐行检索（类似 grep），返回匹配行号、行内容与前后上下文。适合定位特定异常、报错关键字、mod ID 或崩溃特征，避免通读超大文件；获取行号后可按需配合 read_log_file 精确读取。","parameters":{"type":"object","properties":{"query":{"type":"string","description":"检索关键词或文本短语（如异常类名、模组名、错误关键字）"},"filename":{"type":"string","description":"文件名（主文件为 main，或使用 list_log_files 列出的名称；省略则默认 main）"},"case_sensitive":{"type":"boolean","description":"是否区分大小写，默认 false（忽略大小写）"},"context_lines":{"type":"integer","description":"命中行前后各显示的上下文行数（0-5，默认 1）"},"max_matches":{"type":"integer","description":"最大返回匹配项数（1-30，默认 10）"}},"required":["query"]}}}
-]
-```
-
-工具执行失败不会终止整个 Agent 循环：错误文本会作为 `role: tool` 消息返回模型，由模型决定重试、换工具或直接给出结论。
-
-**重复读取防护：** 同一分析会话内，模型对同一文件的第二次 `read_log_file` 调用不会返回文件内容，而是收到提示「文件 X 已读取（共 N 行，M 字节），其内容已在上文中提供，请直接基于已有内容进行分析，不要重复调用本工具」。`filename` 缺省与 `main` 视为同一文件。该机制在服务端强制执行，用于消除模型反复查看同一日志的循环行为。
-
-**工具结果截断规则：**
-
-- `read_log_file` 的全文结果**不受**通用 12KB 工具截断限制，完整进入模型上下文（仅受 `ai.agent.maxFileBytes` 字节上限约束，超限时有明确截断提示）。
-- 检索类工具（`rag_search`、`web_search_exa`、`grep_log_file`）单次结果放宽至 32KB，超限时附带可见标记 `[...工具结果过长，已截断至 N 字节...]`。
-- 初始分析日志上下文：总长度 < 12KB 时完整直传；≥ 12KB 时统一触发错误定位正则，定位到错误行时截取 12KB 聚焦窗口（预留 2.5KB 前置因果与完整后置堆栈，整行对齐）；未定位到错误时不塞入前缀日志正文，改为提供日志概况与常用 grep 关键词，引导模型遵循“适可而止”思维链开展定向排查。
-
-**工具调用兼容细节：**
-
-- 服务端会过滤没有 `name` 的空工具调用，避免将无效 tool call 转发给模型网关。
-- 无参数工具（`list_topics`、`list_log_files`）发送给上游时，`function.arguments` 统一为 JSON 字符串 `{}`，不是空字符串。
-- `tool_call_id` 会原样用于后续 `role: tool` 消息；前端无需自行生成或修改该字段。
-- 同一 Agent 请求内，相同 MCP endpoint 会复用已初始化的 MCP 会话；不同请求不会共享会话。
-- `maxToolRounds` 是完整 Agent 轮次上限；达到上限时发送 `event: status`，其 `data` 为 `{"type":"limit","rounds":N}`，随后仍发送 `event: done`。
-- `reasoning_content` 只有上游模型实际返回时才会产生 `thinking` 事件；模型不返回推理增量时不会人为生成思考内容。
-
-
-> RAG 为内置服务（`rag/` 目录），SQLite FTS5 纯本地检索。构建索引 `php bin/hyperf.php rag:build`；RAG MCP server 整合进 Hyperf 主进程的 `/rag` 路径，默认 `ai.mcp.rag.url = http://127.0.0.1:9501/rag`，数据库路径由 `ai.mcp.rag.db` 指定。索引先在临时数据库中完整构建，再原子替换正式索引，构建失败会保留旧索引。MCP 请求体不设应用层大小限制，这是有意设计；`rag_search.query` 仍受服务端限制。
-
----
-
-## RAG MCP 服务（内置知识库检索）
-
-内置于 Hyperf 主进程的 **Streamable HTTP MCP 服务**（JSON-RPC 2.0），提供本地知识库检索。知识库覆盖：Forge/NeoForge/Fabric 官方开发者文档，PaperMC 全家桶（Paper/Velocity/Waterfall/Folia）、Purpur/Glowstone/Geyser/Quilt 服务端文档，以及 Android 启动器生态的问题案例与错误签名文档。
-
-检索管线：词法召回（FTS5 BM25 + LIKE，AND→OR 逐级降级，CJK 自动二元切分）∪ 可选 bge-m3 向量召回；向量结果按余弦相似度优先，词法结果去重后补充。数据库路径由 `ai.mcp.rag.db` 指定（默认 `rag/index.db`），构建索引：`php bin/hyperf.php rag:build`。
-
-### 端点
-
-```
-POST /rag   （同时接受 GET）
-```
-
-访问控制：默认仅允许 Hyperf 本机回环请求。通过反向代理或外部客户端访问时，在 `Config.inc.php` 设置 `ai.mcp.rag.authToken`，并发送 `Authorization: Bearer <authToken>`；未设置 token 时不要将 `/rag` 暴露到公网。请求体不设应用层大小限制，这是 MCP transport 的有意设计；`rag_search.query` 由服务端单独限制长度。
-
-### JSON-RPC 方法
-
-| 方法 | 说明 |
-|------|------|
-| `initialize` | MCP 握手，返回协议版本与服务信息 |
-| `tools/list` | 列出可用工具（`rag_search` / `list_topics`） |
-| `tools/call` | 调用工具 |
-| `ping` | 健康探测（返回 `{}`） |
-
-### initialize
-
-请求：
-
-```json
-{ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }
-```
-
-响应：
-
-```json
-{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "result": {
-        "protocolVersion": "2025-03-26",
-        "capabilities": { "tools": { "listChanged": false } },
-        "serverInfo": { "name": "logshare-rag", "version": "1.7.1" }
-    }
-}
-```
-
-### tools/list
-
-请求：
-
-```json
-{ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }
-```
-
-响应：
-
-```json
-{
-    "jsonrpc": "2.0",
-    "id": 2,
-    "result": {
-        "tools": [
-            {
-                "name": "rag_search",
-                "description": "在内部知识库中检索相关文档片段。用于查找已知错误与解决方案。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "query": { "type": "string", "description": "检索关键词，使用错误类名或报错关键词" },
-                        "k": { "type": "number", "description": "返回片段数量，默认 5" }
-                    },
-                    "required": ["query"]
-                }
-            },
-            {
-                "name": "list_topics",
-                "description": "列出知识库涵盖的主题与文档分布，帮助你决定检索方向。搜索前可先调用本工具了解知识库有什么。",
-                "inputSchema": { "type": "object", "properties": {} }
-            }
-        ]
-    }
-}
-```
-
-### tools/call —— rag_search
-
-请求：
-
-```json
-{
-    "jsonrpc": "2.0",
-    "id": 3,
-    "method": "tools/call",
-    "params": { "name": "rag_search", "arguments": { "query": "OutOfMemoryError", "k": 5 } }
-}
-```
-
-响应（检索结果以纯文本汇总在 `content[0].text`）：
-
-```json
-{
-    "jsonrpc": "2.0",
-    "id": 3,
-    "result": {
-        "content": [
-            { "type": "text", "text": "在知识库中找到 2 条相关文档：\n\n[1] 内存溢出（来源: ...）\n    ...\n" }
-        ]
-    }
-}
-```
-
-### tools/call —— list_topics
-
-请求：
-
-```json
-{
-    "jsonrpc": "2.0",
-    "id": 4,
-    "method": "tools/call",
-    "params": { "name": "list_topics", "arguments": {} }
-}
-```
-
-响应：
-
-```json
-{
-    "jsonrpc": "2.0",
-    "id": 4,
-    "result": {
-        "content": [
-            { "type": "text", "text": "知识库共 N 个主题目录、M 个分块：\n\n■ ...\n" }
-        ]
-    }
-}
-```
-
-### 错误码
-
-| 错误码 | 含义 |
-|--------|------|
-| `-32700` | 请求不是合法 JSON-RPC |
-| `-32601` | 方法不存在 |
-| `-32602` | 工具不存在 / 参数错误 |
-| `-32603` | 内部错误（含数据库不可用） |
 
 ---
 
@@ -686,38 +429,13 @@ DELETE /v1/admin/logs/{id}
 }
 ```
 
-### 4. AI 分析队列监控
-
-```
-GET /v1/admin/system/queue
-```
-
-查看当前 AI 微队列运行状态与排队指标。
-
-**响应示例：**
-
-```json
-{
-    "success": true,
-    "message": "Queue status retrieved successfully",
-    "enabled": true,
-    "depth": 0,
-    "maxQueue": 50,
-    "maxConcurrent": 2,
-    "waitTimeout": 300,
-    "claimIdleMs": 120000,
-    "jobTtl": 600,
-    "failOpen": true
-}
-```
-
-### 5. 系统统计与状态
+### 4. 系统统计与状态
 
 ```
 GET /v1/admin/system/stats
 ```
 
-查看系统版本、PHP/Swoole 运行时、存储后端、总日志数及 RAG 索引时间戳。
+查看系统版本、PHP/Swoole 运行时、存储后端与总日志数。
 
 **响应示例：**
 
@@ -725,26 +443,24 @@ GET /v1/admin/system/stats
 {
     "success": true,
     "message": "System statistics retrieved successfully",
-    "version": "1.7.8",
+    "version": "1.8.4",
     "phpVersion": "8.4.4",
     "swooleVersion": "6.2.0",
     "storageBackend": "s",
     "totalLogs": 2480,
-    "storageTime": 604800,
-    "aiEnabled": true,
-    "ragIndexUpdated": 1726200000
+    "storageTime": 604800
 }
 ```
 
-### 6. 获取系统配置（已脱敏）
+### 5. 获取系统配置（已脱敏）
 
 ```
 GET /v1/admin/config
 ```
 
-获取全站当前的完整配置树。为防止敏感凭据泄露，`admin.token`、`storage.mariadb.password`、`cache.redis.password`、`ai.mcp.rag.authToken` 统一返回 `******`；`ai.apiKeys` 与 `ai.rag.providers[].apiKey` 统一返回首尾截断掩码（如 `sk-12****abcd`）。
+获取全站当前的完整配置树。为防止敏感凭据泄露，`admin.token`、`storage.mariadb.password`、`cache.redis.password` 统一返回 `******`。
 
-### 7. 更新系统配置（动态热生效）
+### 6. 更新系统配置（动态热生效）
 
 ```
 PUT /v1/admin/config
@@ -752,7 +468,7 @@ PUT /v1/admin/config
 
 更新业务配置并持久化至 `runtime/dynamic_config.json`。修改后立即更新内存单例，无需重启服务即可对新请求热生效。若传入已脱敏的密钥占位符，服务端会自动保留并还原原有的真实密钥，不覆盖。
 
-### 8. 重置系统配置
+### 7. 重置系统配置
 
 ```
 POST /v1/admin/config/reset
@@ -760,131 +476,7 @@ POST /v1/admin/config/reset
 
 清空动态配置文件，重新载入基础配置与环境变量。
 
-### 9. AI 模型连通性测试
-
-```
-POST /v1/admin/config/test-ai
-```
-
-向指定或当前配置的 AI API 发送测试请求，探测模型响应与时延。
-
-**请求参数（JSON）：**
-- `baseUrl` (string, 可选): AI 端点地址，缺省使用当前配置
-- `model` (string, 可选): 模型名，缺省使用当前配置
-- `apiKey` (string, 可选): 密钥，若包含掩码或未传则使用当前有效密钥
-- `timeout` (int, 可选): 超时秒数，默认 15s
-- `headers` (object, 可选): 自定义 HTTP 请求头键值对（如 `{"HTTP-Referer": "https://logshare.cn", "X-Title": "LogShare"}`）
-
-### 10. RAG 向量供应商连通性测试
-
-```
-POST /v1/admin/config/test-rag-provider
-```
-
-向指定或当前配置的向量 Embedding 供应商发送测试向量化请求，探测网络与模型维度。
-
-**请求参数（JSON）：**
-- `baseUrl` (string, 必填): Embedding API 地址
-- `embeddingModel` (string, 必填): 向量模型 ID（如 `BAAI/bge-m3`）
-- `apiKey` (string, 可选): 密钥，支持掩码还原
-- `name` (string, 可选): 供应商代号
-
-### 11. 知识库指标与生态主题全景
-
-```
-GET /v1/admin/rag/stats
-```
-
-返回向量索引文件大小、最后更新时间、文档分块总数（Chunks）、已向量化数量（Embedded）、语义增强状态及生态主题分类（Forge/NeoForge/PaperMC/渲染器/崩溃库等）。
-
-### 12. 触发知识库重新构建
-
-```
-POST /v1/admin/rag/build
-```
-
-异步启动知识库构建任务。采用原子临时文件生成机制，构建过程中不阻塞线上正常检索。
-
-### 13. 获取知识库构建状态
-
-```
-GET /v1/admin/rag/build/status
-```
-
-轮询知识库构建进度与状态（`idle` / `building` / `success` / `failed`）及耗时统计。
-
-### 14. 知识库检索调试
-
-```
-POST /v1/admin/rag/search
-```
-
-在线测试知识库召回效果。
-
-**请求参数（JSON）：**
-- `query` (string, 必填): 检索关键词或报错文本
-- `limit` (int, 可选): 返回条数（1~20，默认 5）
-
-### 15. 知识库分类主题列表
-
-```
-GET /v1/admin/rag/topics
-```
-
-获取知识库所有合法注册分类目录、人工定性描述及文档总数统计。
-
-### 16. 知识库文档列表
-
-```
-GET /v1/admin/rag/docs
-```
-
-查询知识库物理文档列表。
-
-**查询参数（Query）：**
-- `topic` (string, 可选): 按分类过滤（如 `forge`, `zl_help` 等）
-- `keyword` (string, 可选): 按文件名或相对路径模糊搜索
-
-### 17. 获取知识库文档详情
-
-```
-GET /v1/admin/rag/docs/content?path={relativePath}
-```
-
-读取单个 Markdown/TXT/Log 文件的元信息与正文。
-
-### 18. 新建或保存知识库文档
-
-```
-POST /v1/admin/rag/docs/save
-```
-
-保存或修改文档，采用原子写入。
-
-**请求参数（JSON）：**
-- `topic` (string, 必填): 所属分类目录
-- `filename` (string, 必填): 文件名（如 `example.md`）
-- `content` (string, 必填): Markdown 正文文本
-- `isNew` (bool, 可选): 是否新建（若为 true 且目标文件已存在则报错）
-
-### 19. 上传知识库文档
-
-```
-POST /v1/admin/rag/docs/upload
-```
-
-上传 `.md`、`.txt`、`.log` 文件到指定分类，单个限制 ≤ 5MB。支持 `multipart/form-data`（字段：`file`、`topic`）与直接 JSON 载荷（字段：`topic`、`filename`、`content`）。
-
-### 20. 删除知识库文档
-
-```
-DELETE /v1/admin/rag/docs?path={relativePath}
-POST /v1/admin/rag/docs/delete
-```
-
-安全删除指定知识库文档，受路径遍历白名单保护。
-
-### 21. 客户端与生态来源分布统计
+### 8. 客户端与生态来源分布统计
 
 ```
 GET /v1/admin/analytics/sources?days=7
@@ -898,7 +490,7 @@ GET /v1/admin/analytics/sources?days=7
 - `total`: 该时间段日志总数
 - `sources`: 来源生态列表（`source`, `count`, `percentage`）
 
-### 22. Minecraft 版本与加载器矩阵
+### 9. Minecraft 版本与加载器矩阵
 
 ```
 GET /v1/admin/analytics/versions?days=30
@@ -911,7 +503,7 @@ GET /v1/admin/analytics/versions?days=30
 - `versions`: MC 核心版本排行与占比
 - `loaders`: Mod/服务端加载器分布排行与占比
 
-### 23. 日志时序走势大盘
+### 10. 日志时序走势大盘
 
 ```
 GET /v1/admin/analytics/trends?days=7
@@ -924,7 +516,7 @@ GET /v1/admin/analytics/trends?days=7
 - `trends`: 按日走势列表（`date`, `count`, `bytes`），固定为最近 `days` 个自然日（起点为最早统计日的本地零点，无数据的日期补 0）
 - `bytes`: 按时间窗内取样得到的平均单篇体积估算，非逐条精确求和（避免全表读取大字段）
 
-### 24. 存储健康度与底层资源诊断
+### 11. 存储健康度与底层资源诊断
 
 ```
 GET /v1/admin/system/storage-health
@@ -940,7 +532,7 @@ MariaDB 部分额外返回分区状态，用于判断磁盘压力来源：
 | `fragmentationRatio` | `dataFreeBytes / (数据 + 索引)`，仅作同量级下的横向参考。新库数据量小（MB 级）时该比值天然偏高——InnoDB 按 1MB extent 批量预分配，半满 extent 即计入 `DATA_FREE`（实测 86 行零删除即达 0.39），那是预分配不是空洞；数据量上来后自然收敛 |
 | `partitions[]` | 各表分区概览：`dayPartitions`（日分区数量）、`oldestBoundary` / `newestBoundary`（覆盖的时间边界，UTC 秒级）、`totalBytes`、`fallbackPartition`（兜底分区 `p_future` 的行数、占用与空闲）、`largestFreePartition`（空闲最多的分区名、行数与空闲字节——空闲集中在活跃写入分区属健康预分配，散落在多个旧分区则是 DELETE 空洞） |
 
-### 25. 手动触发过期日志清理
+### 12. 手动触发过期日志清理
 
 ```
 POST /v1/admin/system/cleanup-expired
@@ -950,7 +542,7 @@ POST /v1/admin/system/cleanup-expired
 
 MariaDB 后端按天级 RANGE 分区存储，清理通过丢弃整日分区完成，磁盘空间会被真正归还操作系统；返回值是丢弃的分区数与兜底按行清理的条数之和（两者语义不同，前者是分区数、后者是行数）。
 
-### 26. Redis 缓存按需清空
+### 13. Redis 缓存按需清空
 
 ```
 POST /v1/admin/system/cache/flush
@@ -959,7 +551,7 @@ POST /v1/admin/system/cache/flush
 请求体：
 - `prefix`: 缓存前缀（默认 `log:*`，支持 `ai:*` 或 `all`）
 
-### 27. 按条件批量下架日志
+### 14. 按条件批量下架日志
 
 ```
 POST /v1/admin/logs/batch-delete
@@ -972,7 +564,7 @@ POST /v1/admin/logs/batch-delete
 - `keyword`: 可选关键词
 - `limit`: 单次上限（1-1000，默认 500）
 
-### 28. 封禁 IP 清单查询
+### 15. 封禁 IP 清单查询
 
 ```
 GET /v1/admin/security/bans
@@ -980,7 +572,7 @@ GET /v1/admin/security/bans
 
 返回当前所有处于封禁状态的 IP 地址、解封时间戳、剩余有效期与封禁原因（合并 Redis 活跃键与 OpenLiteWaf 本地持久化）。
 
-### 29. 手动封禁 IP
+### 16. 手动封禁 IP
 
 ```
 POST /v1/admin/security/ban
@@ -991,7 +583,7 @@ POST /v1/admin/security/ban
 - `ttl`: 封禁时长（秒，默认 86400）
 - `reason`: 封禁原因备注（可选）
 
-### 30. 手动解除 IP 封禁
+### 17. 手动解除 IP 封禁
 
 ```
 POST /v1/admin/security/unban
@@ -1005,7 +597,7 @@ POST /v1/admin/security/unban
 - `unbanned`: 应用层封禁（Redis 与本地封禁文件）是否已解除
 - `waf_sync`: 边缘 WAF 封禁的同步结果，取值 `ok`（已解除）/ `skipped`（未配置 `OPENLITEWAF_ADMIN_TOKEN`）/ `failed`（调用 Nginx 运维端点失败）/ `invalid`（IP 非法）。WAF 封禁按 IP 生效且随快照持久化，`unbanned: true` 不代表该来源已能正常访问；为 `skipped` 或 `failed` 时边缘仍会在封禁 TTL 内返回 403
 
-### 31. 边缘防御概览与分类拦截统计
+### 18. 边缘防御概览与分类拦截统计
 
 ```
 GET /v1/admin/security/overview
@@ -1013,7 +605,7 @@ GET /v1/admin/security/overview
 
 返回 OpenLiteWaf 拦截大盘数据，包括累计请求与拦截次数、当前封禁 IP 总量、分类拦截计数（CC、SQL 注入、XSS、目录穿越、RCE/探针等）、来源 IP Top、逐分钟趋势，以及 `ban_reasons`——按「类目#规则序号」（如 `probe#57`、`cc`）归因的生效中封禁，用于判断是否有单条规则在批量误封；旧版 WAF 未上报该字段时为空对象。
 
-### 32. 获取违规内容过滤规则
+### 19. 获取违规内容过滤规则
 
 ```
 GET /v1/admin/security/content-rules
@@ -1021,7 +613,7 @@ GET /v1/admin/security/content-rules
 
 返回当前生效的违规内容过滤开关（`enabled`）、关键词黑名单（`keywords`）和正则表达式规则列表（`patterns`）。
 
-### 33. 更新违规内容过滤规则
+### 20. 更新违规内容过滤规则
 
 ```
 PUT /v1/admin/security/content-rules
@@ -1032,102 +624,7 @@ PUT /v1/admin/security/content-rules
 - `keywords`: 字符串数组，违规关键词列表
 - `patterns`: 字符串数组，违规正则列表
 
-### 34. AI 智能分析运营指标查询
-
-```
-GET /v1/admin/ai/metrics?days=7
-```
-
-参数：
-- `days`: 统计天数（1-30，默认 7）
-
-响应：
-- `summary`: 核心运营总览（总分析请求数、成功/失败数、成功率、平均耗时、P50/P90/P99 耗时、Token 输入/输出/总计预估）；其中 `ragCalls` 按 `rag_search` 实际执行次数累加，计数点在 RAG 服务落点，内联与队列两条分析路径同口径
-- `trends`: 按日分析吞吐量与平均耗时走势
-- `topics`: 知识库 Top 命中排行及占比（`[{ topic, count, percentage }]`）。按每次检索**实际返回条目所属目录**统计，而非模型传入的 `topic` 限定——多数检索不带该参数，按入参会恒为空；当日无检索时为空数组
-- `durationDistribution`: 响应耗时分布区间统计（极速、正常、较长、深度推理）
-
-### 35. AI 微队列深层探查
-
-```
-GET /v1/admin/ai/queue/inspect?limit=20
-```
-
-返回队列暂停消费状态、当前排队深度、活跃消费者 Workers 状态与 pending 消息、在途待处理任务列表（等待时长、重试次数）以及死信任务记录。
-
-### 36. 暂停 AI 微队列消费
-
-```
-POST /v1/admin/ai/queue/pause
-```
-
-手动暂停消费者进程拉取新任务（适合上游 LLM 额度超标或突发故障时运维干预），任务仍可入队但暂缓消费。
-
-### 37. 恢复 AI 微队列消费
-
-```
-POST /v1/admin/ai/queue/resume
-```
-
-解除暂停标记，消费者协程立即恢复拉取积压任务。
-
-### 38. 一键安全排空积压队列
-
-```
-POST /v1/admin/ai/queue/flush
-```
-
-立即移除当前队列中积压待处理的任务，释放中继连接并从 Redis Stream 中 ACK 与删除。返回清理条数 `{"cleared": N}`。
-
-### 39. 清空死信任务列表
-
-```
-POST /v1/admin/ai/queue/dead/clear
-```
-
-清空所有被判定为死信的任务记录。
-
-### 40. 获取已知领域知识条目列表
-
-```
-GET /v1/admin/ai/domain-knowledge
-```
-
-响应：
-- `items`: 数组，领域知识条目列表（包含 `id`, `content`, `enabled`, `created_at`, `updated_at`）
-- `total`: 整数，条目总数
-
-### 41. 新增已知领域知识条目
-
-```
-POST /v1/admin/ai/domain-knowledge
-```
-
-请求体：
-- `content`: 字符串，必填，单条知识正文（单条严格不超过 200 字）
-- `enabled`: 布尔值，可选，是否启用（默认 true）
-
-说明：已知领域知识条目由管理员统一维护，系统在执行 AI 分析时将直接拼接入系统提示词段落『已知领域知识』，LLM 自身无写权限且不走动态 Tools 读取，作为硬性先验业务排障规则。
-
-### 42. 更新已知领域知识条目
-
-```
-PUT /v1/admin/ai/domain-knowledge/{id}
-```
-
-请求体：
-- `content`: 字符串，可选，修改正文（单条不超过 200 字）
-- `enabled`: 布尔值，可选，启停开关
-
-### 43. 删除已知领域知识条目
-
-```
-DELETE /v1/admin/ai/domain-knowledge/{id}
-```
-
-删除指定领域知识条目。
-
-### 44. 获取 SpinYarn 映射状态与本地映射库清单
+### 21. 获取 SpinYarn 映射状态与本地映射库清单
 
 ```
 GET /v1/admin/spinyarn/status
@@ -1135,7 +632,7 @@ GET /v1/admin/spinyarn/status
 
 返回 SpinYarn PHP 扩展加载状态、版本、本地 `mappings/` 目录路径以及 Yarn 与 Vanilla 映射文件列表与大小统计。
 
-### 41. SpinYarn 在线反混淆测试探针
+### 22. SpinYarn 在线反混淆测试探针
 
 ```
 POST /v1/admin/spinyarn/test
@@ -1170,7 +667,7 @@ POST /v1/admin/spinyarn/test
 }
 ```
 
-### 42. 分页获取操作审计日志
+### 23. 分页获取操作审计日志
 
 ```
 GET /v1/admin/audit/logs?page=1&pageSize=20&action=log.delete&keyword=s123456
@@ -1178,7 +675,7 @@ GET /v1/admin/audit/logs?page=1&pageSize=20&action=log.delete&keyword=s123456
 
 支持按动作代号（`action`）、关键词（`keyword`）与时间戳范围（`since`/`until`）筛选检索管理员高危运维操作记录（包含删除、封禁、解封、规则修改、队列控制等）。
 
-### 43. 清空操作审计日志
+### 24. 清空操作审计日志
 
 ```
 DELETE /v1/admin/audit/logs
@@ -1186,7 +683,7 @@ DELETE /v1/admin/audit/logs
 
 清空 Redis 环形缓冲区及本地审计日志文件。返回清空条数 `{"cleared": N}`。
 
-### 44. 获取统一事件队列状态与监控指标
+### 25. 获取统一事件队列状态与监控指标
 
 ```
 GET /v1/admin/event-queue/stats
@@ -1233,7 +730,7 @@ GET /v1/admin/event-queue/stats
 
 指标口径说明：消费者处理完成后立即执行 `XACK` 与 `XDEL`，稳态下 `streamLength` 与 `backlog` 恒为 0，属设计而非故障；累计吞吐看 `entriesRead`（消费组自创建以来的投递条数，需 Redis 7.0+，低版本无该字段时为 0）与 `counters` 各计数。`counters.processed_blocked` 是异步安全审核命中违规并完成日志删除与来源封禁的拦截数，属预期治理结果，与真正的处理失败 `processed_failed` 分列统计。
 
-### 45. 分页获取死信任务列表
+### 26. 分页获取死信任务列表
 
 ```
 GET /v1/admin/event-queue/dead?limit=50
@@ -1265,7 +762,7 @@ GET /v1/admin/event-queue/dead?limit=50
 }
 ```
 
-### 46. 重放死信任务
+### 27. 重放死信任务
 
 ```
 POST /v1/admin/event-queue/dead/retry
@@ -1292,192 +789,13 @@ POST /v1/admin/event-queue/dead/retry
 }
 ```
 
-### 47. 清空死信队列
+### 28. 清空死信队列
 
 ```
 DELETE /v1/admin/event-queue/dead
 ```
 
 物理清空死信流 `events:log:dead`。返回 `{"cleared": true}`。
-
----
-
-### 48. AI 分析记录与 Trace 追溯
-
-```
-GET    /v1/admin/ai/analyses
-GET    /v1/admin/ai/analyses/{cacheKey}
-GET    /v1/admin/ai/analyses/{cacheKey}/trace
-DELETE /v1/admin/ai/analyses/{cacheKey}
-```
-
-- `GET /v1/admin/ai/analyses`：分析记录分页列表，支持 `page`, `limit`, `mode`（deep/launcher/quick）, `date`（YYYY-MM-DD）, `minScore`, `maxScore`, `keyword` 过滤。
-- `GET /v1/admin/ai/analyses/{cacheKey}`：获取单条分析完整详情，包含多轮工具调用链（`toolCallChain`）、四维评分（`score`）、结构化验证结果（`validation`）与元数据。
-- `GET /v1/admin/ai/analyses/{cacheKey}/trace`：导出该次分析的全生命周期 Trace JSON 数据（含逐轮耗时、模型名称、提示词版本与错误堆栈）。
-- `DELETE /v1/admin/ai/analyses/{cacheKey}`：物理删除分析记录并同步清空对应结果缓存。
-
-`{cacheKey}` 形如 `ai:analysis:<日志ID>` 或 `ai:analysis:hash:<sha256>`，含冒号。调用方通常按 RFC 3986 把它 percent-encode 成 `ai%3Aanalysis%3A…` 再放进路径，服务端会先解码再查库（FastRoute 本身不解码路径参数），因此编码与未编码两种形态都可访问；响应与审计日志中回显的是解码后的原始形态。
-
-### 49. 质量评分仪表盘（Scoreboard）
-
-```
-GET /v1/admin/ai/scoreboard
-GET /v1/admin/ai/scoreboard/slow
-GET /v1/admin/ai/scoreboard/low-score
-```
-
-- `GET /v1/admin/ai/scoreboard`：四维质量评分概览与日均趋势（支持 `days` 参数，默认 7 天），聚合分析总数、平均总分、工具效率分、证据充分性分及评级分布。统计覆盖时间窗内**全部**留存记录：分析记录保留 7 天（`TTL_SECONDS`）、索引条目上限 5000（`MAX_INDEX_ENTRIES`），因此 `days` 超过 7 不会看到更早数据，记录数触顶时按最新 5000 条聚合。
-- `GET /v1/admin/ai/scoreboard/slow`：慢分析耗时排查列表（参数 `limit`, `minDurationMs` 默认 15000ms）。
-- `GET /v1/admin/ai/scoreboard/low-score`：低分诊断预警列表（参数 `limit`, `maxScore` 默认 60）。
-
-### 50. Prompt 版本化热管理
-
-```
-GET    /v1/admin/ai/prompts
-GET    /v1/admin/ai/prompts/{promptVersion}
-POST   /v1/admin/ai/prompts
-PUT    /v1/admin/ai/prompts/{promptVersion}
-DELETE /v1/admin/ai/prompts/{promptVersion}
-POST   /v1/admin/ai/prompts/{promptVersion}/activate
-```
-
-- `GET /v1/admin/ai/prompts`：列出所有提示词版本，标明当前激活版本与更新时间。
-- `GET /v1/admin/ai/prompts/{promptVersion}`：获取指定版本的完整提示词文本与各模块片段配置。
-- `POST /v1/admin/ai/prompts`：创建新 Prompt 版本（可从当前激活版本 Fork 派生，请求体包含 `version`, `name`, `sections`, `notes`）。
-- `PUT /v1/admin/ai/prompts/{promptVersion}`：更新指定 Prompt 版本的片段内容。
-- `DELETE /v1/admin/ai/prompts/{promptVersion}`：删除未激活的版本（当前激活版本受保护不可删除）。
-- `POST /v1/admin/ai/prompts/{promptVersion}/activate`：将指定版本激活为全局默认提示词，毫秒级跨进程热重载生效。
-
-### 51. 工具链在线门控与配置
-
-```
-GET /v1/admin/ai/tools
-PUT /v1/admin/ai/tools/{name}/enable
-PUT /v1/admin/ai/tools/{name}/config
-```
-
-- `GET /v1/admin/ai/tools`：列出已注册的全部排障工具（`rag_search`, `web_search_exa`, `grep_log_file`, `github_issue_search` 等 9 大工具）及其启用状态、重试预算与降级链。
-- `PUT /v1/admin/ai/tools/{name}/enable`：在线启用或禁用指定工具（请求体 `{"enabled": true/false}`），立即同步更新 Prompt 中的工具列表与 Function Calling Schema。
-- `PUT /v1/admin/ai/tools/{name}/config`：调整工具运行参数（`maxRetries`, `timeoutMs`, `fallback` 链等）。
-
-### 52. 排障模式配置
-
-```
-GET /v1/admin/ai/modes
-PUT /v1/admin/ai/modes/{mode}
-```
-
-- `GET /v1/admin/ai/modes`：列出 `deep`、`launcher`、`quick` 三种排障模式当前的运行参数（最大轮次、Exa 网络搜索上限、RAG 知识检索上限、行级日志检索上限）。
-- `PUT /v1/admin/ai/modes/{mode}`：调整指定模式的预算参数，热重载立即生效。
-
----
-
-### 53. RAG 检索链路能力开关
-
-```
-GET /v1/admin/rag/config
-PUT /v1/admin/rag/config
-```
-
-`GET` 返回当前生效的开关快照：
-
-```json
-{
-  "chunker": "heading",
-  "rerank": {
-    "enabled": false, "maxCandidates": 30, "type": "llm",
-    "baseUrl": "", "model": "", "apiKey": "", "timeout": 10, "allowLoopback": false
-  },
-  "queryRewrite": { "enabled": false },
-  "incrementalBuild": false,
-  "semanticCache": true,
-  "telemetry": { "enabled": true, "slowMs": 500 }
-}
-```
-
-`rerank.type` 决定精排器实现：`llm` 复用 `ai.apiKeys`/`ai.model` 指向的对话模型，对候选池做一次 listwise 重排；`http` 调用专用 cross-encoder 排序端点，请求为 `POST {baseUrl}/rerank`，请求体 `{"model","query","documents","top_n"}`，与 Cohere Rerank、Jina、SiliconFlow bge-reranker、vLLM、Xinference 等网关的约定一致。响应解析兼容 `{"results":[{"index","relevance_score"}]}` 与裸数组 `[{"index","score"}]`，带分值时按分值降序重排。
-
-`PUT` 接受上述结构的任意子集，按白名单校验后局部合并写入 `runtime/dynamic_config.json`，跨常驻进程热生效，无需重启；响应体为更新后的完整快照（与 `GET` 一致）。`rerank` 为逐字段合并，只提交 `enabled` 不会抹掉已配置的端点参数。
-
-取值约束：`chunker` 限 `heading` / `sliding` / `token` / `hybrid`；`rerank.type` 限 `llm` / `http`，取 `http` 时 `baseUrl` 与 `model` 必须齐备，否则 422；`rerank.timeout` 收敛到 1~60 秒；`rerank.maxCandidates` 收敛到 2~50；`telemetry.slowMs` 下限 1。`baseUrl` 只接受 http/https，私网地址一律拒绝，本机自托管端点须显式置 `allowLoopback: true`（仅放行 `localhost`/`127.0.0.1`/`::1`）。`rerank.apiKey` 读取时只回显掩码形态（`sk-1****abcd`），提交时原样回传掩码即沿用已存密钥，填入新值则覆盖。未识别任何字段时返回 400。`chunker` 仅影响后续索引构建，切换后需重跑构建才会作用于既有切片。
-
-精排失败不影响检索：端点不可达、超时、HTTP ≥ 400 或响应无法解析时一律回退 RRF 融合顺序，细节写 `Syslog::error('RAG', ...)`；配置非法而退回 `llm` 形态时同样有日志记录。
-
-### 54. 知识库索引差异预览
-
-```
-GET /v1/admin/rag/build/stale
-```
-
-按文件 mtime 与索引内 `chunk_meta` 记录比对，只读不写入：
-
-```json
-{ "changed": ["patterns/xxx.md"], "missing": ["format/yyy.md"], "unchanged": 61 }
-```
-
-索引尚未构建或缺少 mtime 记录时返回 409；后者会导致全部文件被判为待重建，增量入口因此安全退化为全量。
-
-### 55. 触发增量构建
-
-```
-POST /v1/admin/rag/build/incremental
-```
-
-仅重索引 `changed` 与 `missing` 清单中的文件，其余切片保持不动。与全量 `POST /v1/admin/rag/build` 共用状态文件与 `building` 防重入锁，响应 `{ success, status, message }`，进度仍由 `GET /v1/admin/rag/build/status` 轮询。
-
-### 56. RAG 检索遥测
-
-```
-GET /v1/admin/rag/telemetry[?date=YYYY-MM-DD&slow=1&slowLimit=10]
-```
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `date` | string | 否 | 查询指定自然日，格式 `Y-m-d`，默认当日；格式非法返回 400 |
-| `slow` | int | 否 | 非 0 时附带慢查询明细 |
-| `slowLimit` | int | 否 | 明细条数（1~100，默认 10） |
-
-```json
-{
-  "date": "2026-09-23",
-  "available": true,
-  "summary": {
-    "queries": "53", "zero_results": "0", "slow": "8",
-    "total_ms:sum": "19189.11", "total_ms:max": "942.87",
-    "lexical_ms:sum": "56.01", "lexical_ms:max": "3.36",
-    "semantic_ms:sum": "19127.48", "semantic_ms:max": "940.79",
-    "vector_searches": "53", "vector_hits_sum": "1020",
-    "embed_api_calls": "53", "embed_cache_hits": "0"
-  },
-  "slowQueries": [
-    { "at": 1790138276, "query": "Registry is already frozen", "k": 5, "topic": "patterns",
-      "total_ms": 674.26, "lexical_ms": 0.46, "semantic_ms": 673.74, "vector_hits": 20, "reranked": false }
-  ]
-}
-```
-
-`summary` 为 Redis hash 原样透出，值均为字符串；未启用的阶段不产生对应键（`rewrite_ms:*` 依赖 queryRewrite、`reranked` 依赖 rerank、`result_cache` 依赖 semanticCache），消费方须把「键缺失」与「计数为零」区分渲染。Redis 不可用或当日零检索时 `summary` 为 `null` 且 `available: false`。遥测写入全程 fail-open，采集失败不影响检索链路。
-
-### 57. 精排端点连通性探测
-
-```
-POST /v1/admin/rag/test-rerank
-```
-
-向 `{baseUrl}/rerank` 投递两条固定测试文档，校验协议、鉴权与响应形态，供面板在保存前确认端点可用。请求体字段全部可选：
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `baseUrl` | string | 缺省时取已存配置 |
-| `model` | string | 缺省时取已存配置 |
-| `apiKey` | string | 留空或传掩码值时自动换成已存真值 |
-| `allowLoopback` | bool | 缺省时取已存配置 |
-
-```json
-{ "success": true, "latencyMs": 214, "httpCode": 200, "model": "BAAI/bge-reranker-v2-m3", "order": [0, 1] }
-```
-
-探测失败不算接口错误，仍返回 200 并在 `data` 中给出 `success: false`、`httpCode` 与 `error` 文本；只有入参非法（`baseUrl` 协议不合、命中私网、未开回环开关却指向回环、`model` 缺失）才返回 4xx。`order` 为两条测试文档按相关性重排后的 0-based 索引序列，响应形态无法解析时该字段缺席并给出期望格式提示。
 
 ---
 

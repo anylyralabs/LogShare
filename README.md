@@ -2,17 +2,16 @@
 
 LogShare 是一个面向 Minecraft 与 Hytale 等沙盒游戏的高性能日志智能分析与安全分享云平台。使用者通过 HTTP 接口上传服务端、客户端日志或崩溃转储包，即可获得高可用分享链接；系统采用**极速上传解耦**设计，上传时仅执行轻量 Codex 特征检测并毫秒级响应，将高耗时的 SpinYarn 混淆堆栈反解与全量敏感内容审核交由**统一异步事件队列（EventQueue）**排队调度处理。
 
-在此之上，平台搭载工业级解耦重构的 LogAgent 智能排障诊断引擎，内建 `deep`（深度推理排障）、`launcher`（启动器崩溃优先）与 `quick`（极速直答）三种分析模式。支持自主调度 Exa 多源网络搜索、内置本地向量与全文检索（RAG）、日志精确定位检索及 GitHub 启动器排障工具链，结合动态日志窗口（LogWindowManager）聚焦真实崩溃上下文，以 SSE 流式输出思维链、排障建议及严格结构化 JSON 诊断块，并由四维评估引擎（AnalysisScorer）与链路追踪系统（AnalysisTracer）保障诊断质量。
+AI 智能诊断已从本仓库剥离，由外部服务提供；本仓库保留日志上传、分享、Codex 本地结构化解析，以及异步安全审核与 SpinYarn 反混淆流水线。`/v1/ai/*`、`/rag` 及相关管理接口不再提供，统一返回 404。
 
-服务端基于 Hyperf 3.2 框架与 Swoole 6.2 高性能协程常驻进程引擎，原生要求 PHP 8.4 及以上。存储后端支持 MariaDB 与文件系统二选一，Redis 作为缓存、限流与事件流消息总线。当前版本 `v1.8.3`，更新记录见 [`CHANGELOG.md`](CHANGELOG.md)。
+服务端基于 Hyperf 3.2 框架与 Swoole 6.2 高性能协程常驻进程引擎，原生要求 PHP 8.4 及以上。存储后端支持 MariaDB 与文件系统二选一，Redis 作为缓存、限流与事件流消息总线。当前版本 `v1.8.4`，更新记录见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ## 环境要求
 
-- PHP 8.4+，扩展 ext-json、ext-zlib、ext-mbstring、ext-pdo_mysql、ext-pdo_sqlite
+- PHP 8.4+，扩展 ext-json、ext-zlib、ext-mbstring、ext-pdo_mysql
 - Swoole 6.2（常驻进程运行时）
 - MariaDB 或文件系统（主要存储，二选一）
 - Redis（可选，用于缓存、限流与统一异步事件队列；缺少 ext-redis 时以内置 mock 优雅降级）
-- SQLite（RAG 知识库检索）
 - SpinYarn 扩展（可选，原生 Rust 编写，用于混淆堆栈反解；缺失时日志原样透传）
 
 ## 安装与启动
@@ -23,7 +22,7 @@ cp Config.inc.example.php Config.inc.php
 php bin/hyperf.php start
 ```
 
-`Config.inc.php` 是唯一的应用配置文件（已被 Git 忽略），数据库与 Redis 连接信息可通过 `DB_*`、`REDIS_*` 环境变量覆盖。服务监听 `9501` 端口；内置 RAG 的 MCP 服务承载于同一进程的 `/rag` 路径，默认仅允许本机回环访问。
+`Config.inc.php` 是唯一的应用配置文件（已被 Git 忽略），数据库与 Redis 连接信息可通过 `DB_*`、`REDIS_*` 环境变量覆盖。服务监听 `9501` 端口。
 
 ## 配置
 
@@ -37,8 +36,6 @@ php bin/hyperf.php start
 | `id` | 日志 ID 的字符集与长度（修改会破坏已有 ID） |
 | `security` | 动态合规防护：AES-256-GCM 密文存储违规关键词与正则、IP 黑名单与反向代理真实 IP 判定 |
 | `eventQueue` | 统一日志事件队列：Redis Stream 键名与消费组、最大重试次数、异步反混淆与异步安全审核开关 |
-| `ai` | AI 分析核心：API Key 轮询列表、模型、`agent`（LogAgent 开关）、`queue`（Redis Streams 分析微队列）、`rag`（bge-m3 语义向量增强与故障转移） |
-| `github` | 启动器/渲染器排障工具：多 Personal Access Token 轮询、速率限制感知、403/429 自动冷却故障切换 |
 | `rateLimit` | 应用层限流（limit / window，Redis INCR 实现） |
 | `spinyarn` | 反混淆扩展：映射目录与缓存水位 |
 | `admin` | 管理后台开关与安全 Token（`/{version}/admin/*` 控制台鉴权） |
@@ -52,11 +49,11 @@ php bin/hyperf.php start
 docker compose -f docker/compose.yaml up -d --build
 ```
 
-启动前先将 `.env.example` 复制为 `.env` 并填写数据库密码与 API Key。`.env` 由 Hyperf 进程读取，同时供 Compose 初始化 MariaDB 与 Redis 服务，其中 `MARIADB_PASSWORD`、`MARIADB_ROOT_PASSWORD` 与 `REDIS_PASSWORD` 必须在 Hyperf、MariaDB、Redis 与定时清理服务之间保持一致。AI 默认关闭；只有同时设置 `AI_ENABLED=true`、`AI_API_KEYS`、`AI_BASE_URL` 和 `AI_MODEL` 后才会启用，语义 RAG 启用时还要求 `AI_RAG_PROVIDERS` 为合法的 JSON 数组。
+启动前先将 `.env.example` 复制为 `.env` 并填写数据库密码。`.env` 由 Hyperf 进程读取，同时供 Compose 初始化 MariaDB 与 Redis 服务，其中 `MARIADB_PASSWORD`、`MARIADB_ROOT_PASSWORD` 与 `REDIS_PASSWORD` 必须在 Hyperf、MariaDB、Redis 与定时清理服务之间保持一致。
 
-完整的业务配置（推理密钥、语义 RAG 供应商、生产域名）通过挂载项目根目录的 `Config.inc.php` 注入容器，服务器上放置好该文件后执行上面的命令即可。该文件包含密钥，已被 Git 与 Docker 构建上下文排除，只需在服务器上手动放置，不要提交进仓库。挂载后 AI 配置以文件为准；`DB_*` 与 `REDIS_*` 的容器网络寻址仍由 compose 环境变量提供。
+完整的业务配置（数据库密码、生产域名等）通过挂载项目根目录的 `Config.inc.php` 注入容器，服务器上放置好该文件后执行上面的命令即可。该文件包含密钥，已被 Git 与 Docker 构建上下文排除，只需在服务器上手动放置，不要提交进仓库；`DB_*` 与 `REDIS_*` 的容器网络寻址仍由 compose 环境变量提供。
 
-Compose 定义五个服务：**nginx**（OpenResty 反向代理，对外监听 80/443，承载 OpenLiteWaf 与 TLS 证书）；**hyperf**（应用主进程，仅在内部网络监听 9501，启动时自动构建 RAG 索引，构建采用临时数据库加原子替换，失败时保留旧索引）；**mariadb**（数据存储，表结构由 `docker/mariadb-init.sql` 在首次创建卷时初始化）；**mariadb-events**（在数据库可用后创建过期日志清理 Event）；**redis**（缓存与限流）。
+Compose 定义五个服务：**nginx**（OpenResty 反向代理，对外监听 80/443，承载 OpenLiteWaf 与 TLS 证书）；**hyperf**（应用主进程，仅在内部网络监听 9501）；**mariadb**（数据存储，表结构由 `docker/mariadb-init.sql` 在首次创建卷时初始化）；**mariadb-events**（在数据库可用后创建过期日志清理 Event）；**redis**（缓存与限流）。
 
 OpenLiteWaf（`OpenLiteWaf/`）是 nginx 容器内的 OpenResty Lua 模块，在反向代理层做按 IP 的固定窗口 CC 限速（超限返回 429，不封 IP）与攻击特征检查（SQL 注入、XSS、路径穿越、命令执行、扫描器探测）；检查范围包括 URL 原始与解码形态、请求路径、User-Agent 和请求体（接收任意用户文本的日志、分析、遥测与管理端点豁免请求体扫描），特征命中返回 403 并按窗口累计次数封禁 IP（默认累计 3 次才封，避免一次误判让该来源十分钟内在所有端点不可用）。统计页 `https://<域名>/security`（JSON 汇总：`/security/stats`，攻击日志分页：`/security/logs`，现存封禁与封禁原因：`/security/bans`）展示内存计数与脱敏后的攻击记录，含命中的规则序号与匹配对象；计数与封禁都会快照到挂载目录，重启后恢复（即“重启不是解封手段”）。误封的运行时解封走特权端点 `POST /security/unban`，令牌为 `.env` 中的 `OPENLITEWAF_ADMIN_TOKEN`，未配置时该端点一律 404。工作方式、配置与规则编写见 `OpenLiteWaf/README.md`；改动 Lua 文件后执行 `docker compose -f docker/compose.yaml restart nginx` 生效（`git pull` 只更新文件，不重载不生效；容器内 `nginx -s reload` 在本部署不可靠）。应用层安全由 Hyperf 负责，参数化查询、输出转义与脱敏过滤链不依赖本模块。
 
@@ -111,15 +108,13 @@ GET    /v1/raw/{id}/{filename}                   获取指定子文件（支持�
 GET    /1/log/{id} | /v1/log/{id}                获取日志元信息与文件列表
 GET    /1/insights/{id} | /v1/insights/{id}      获取 Codex 结构化分析结果
 POST   /1/analyse | /v1/analyse                  直接分析日志内容（不存储）
-GET    /1/ai/{id} | /v1/ai/{id}                  AI 智能诊断（SSE 流式，支持 mode 与 promptVersion 参数）
-POST   /1/ai/analyse | /v1/ai/analyse           提交内容直接分析（不落盘，SSE）
 POST   /v1/telemetry/report                      上报客户端与启动器遥测指标
 GET    /1/limits | /v1/limits                    获取速率限制信息
 GET    /1/filters | /v1/filters                  获取当前启用的过滤器列表
-/*     /v1/admin/*                               管理后台控制台（含全套 LogAgent 追踪与治理，需 Admin Token）
+/*     /v1/admin/*                               管理后台控制台（需 Admin Token）
 ```
 
-上传接口接受 `application/x-www-form-urlencoded` 与 `application/json`，支持 gzip / deflate / brotli 压缩请求体；`files` 数组可附加多个文件，`.zip` 压缩包自动展开并保留内部相对路径，展开后每个文件独立经过脱敏过滤链。客户端接入时遵循最佳实践规范：**尽可能同时上传「游戏主日志 + 崩溃报告 + 启动器日志」并注明 `source` 来源标识**，便于 AI 诊断引擎与社区准确定位启动器及渲染器环境引发的深层异常。上传响应中的 `token` 是删除该日志的唯一凭证。AI 分析使用 SSE 流式输出，LogAgent 支持 `deep`（深度排障）、`launcher`（启动器崩溃优先）和 `quick`（极速直答）三种模式，可自主调度 Exa 搜索、RAG 检索、日志精准定位检索及 GitHub 启动器排障工具，诊断结论附带结构化 JSON 卡片；Admin 端提供完整的分析追踪（Trace 归档/导出）、质量评分看板（Scoreboard）、Prompt 版本热更新及工具链门控。AI 关闭时相关端点统一返回 404。
+上传接口接受 `application/x-www-form-urlencoded` 与 `application/json`，支持 gzip / deflate / brotli 压缩请求体；`files` 数组可附加多个文件，`.zip` 压缩包自动展开并保留内部相对路径，展开后每个文件独立经过脱敏过滤链。客户端接入时建议同时上传「游戏主日志 + 崩溃报告 + 启动器日志」并注明 `source` 来源标识。上传响应中的 `token` 是删除该日志的唯一凭证。Codex 结构化解析结果通过 `/v1/insights/{id}` 返回；AI 智能诊断由外部服务提供，本仓库不再暴露 `/v1/ai/*` 端点。
 
 ## 架构
 
@@ -129,34 +124,19 @@ GET    /1/filters | /v1/filters                  获取当前启用的过滤器�
 bin/hyperf.php            入口文件（Hyperf Application）
 core.php                  引导文件（定义 CORE_PATH 并加载 Config）
 app/                      核心类库（App\ 命名空间）
-├── Agent/                LogAgent（多轮排障引擎、提示词版本化、工具链管理与质量追踪）
-│   ├── Context/          AgentContext / ToolSession（会话上下文与工具状态链）
-│   ├── Gateway/          AIClientGateway / LlmGateway / LlmStreamHandler（LLM 调用网关与故障转移）
-│   ├── Quality/          AnalysisScorer / ResultValidator（四维质量评分与结构化结果验证）
-│   ├── Tool/             ToolRegistry / ToolFactory / ToolInterface（9 大排障工具注册表与降级网关）
-│   ├── Window/           LogWindowManager（自适应动态日志窗口与报错锚点聚焦）
-│   ├── AgentRuntime.php  多轮工具循环引擎与分层停止条件控制
-│   ├── AnalysisMode.php  排障模式（deep / launcher / quick）与动态预算控制
-│   ├── AnalysisRecordManager.php 分析记录与 Trace 归档持久化（Redis ZSET 索引）
-│   ├── AnalysisTracer.php 全链路执行追踪器（逐轮工具耗时、报错与指标）
-│   ├── PromptBuilder.php 提示词模板构建与动态知识注入
-│   ├── PromptManager.php 提示词版本库热管理与在线激活
-│   └── ToolManager.php   排障工具链在线门控与 Fallback 降级配置
 ├── Cache/                Redis 缓存实现与协程连接池
-├── Client/               AI、MCP、GitHub、Redis、SpinYarn 客户端
-├── Command/              Hyperf 命令（rag:build 等）
-├── Controller/           HTTP 控制器（注解路由，含 Log、AI、Admin 控制台等）
+├── Client/               Redis、SpinYarn 客户端
+├── Controller/           HTTP 控制器（注解路由，含 Log、Admin 控制台等）
 ├── Data/                 数据模型（Token、MetadataEntry）
 ├── Filter/               预处理过滤链（敏感信息脱敏）
 ├── Middleware/           CORS、AdminAuth、限流中间件
 ├── Parser/               请求体解码（Brotli / Gzip / Deflate 自动解压与炸弹防护）
-├── Process/              常驻消费者进程（AiQueueConsumer、EventQueueConsumer）
+├── Process/              常驻事件消费者进程（EventQueueConsumer）
 ├── Queue/                统一日志异步事件队列（EventQueue、QueueEvent、DeadLetterQueue、Handler/）
-├── Rag/                  本地 RAG 检索引擎（SQLite FTS5 + 语义向量召回）
-├── Response/             统一响应结构封装（ApiResponse）
-├── Sse/                  SSE 流式输出封装（SseWriter、AnalysisEmitter）
+├── ApiResponse.php       统一响应结构封装
 ├── Storage/              持久化存储后端（MariaDbStorage、FilesystemStorage）
-├── System/               系统核心服务（SecurityService、AuditLogManager、TelemetryService、SpinYarnManager）
+├── System/               系统核心服务（SecurityService、AuditLogManager、StorageHealthService、SpinYarnManager）
+├── Telemetry/            客户端遥测统计服务
 ├── ApiError.php          API 业务异常（ApiExceptionHandler 统一渲染）
 ├── Config.php            配置加载器、环境变量覆盖与动态热重载引擎
 ├── ContentParser.php     请求正文与启动器特征识别
@@ -165,13 +145,12 @@ app/                      核心类库（App\ 命名空间）
 ├── Log.php               日志核心模型与反混淆持久化
 └── Id.php                ID 生成与存储后端编解码
 config/autoload/          Hyperf 框架配置（server、databases、middlewares 等）
-rag/                      内置 RAG：knowledge/ 静态知识库，index.db 索引（构建生成，勿提交）
 docker/                   Compose 编排、nginx 站点配置、镜像构建
 OpenLiteWaf/              边缘 WAF 独立子模块（OpenResty Lua，CC 防御与攻击特征拦截）
 OpenLiteStats/            边缘站点访问统计独立子模块（无锁位图 UV、流量统计与日志分析）
 Config.inc.php            全部配置（gitignored）
 Config.inc.example.php    配置模板
-.env.example              环境变量模板（数据库、Redis、AI、Admin 秘钥覆盖）
+.env.example              环境变量模板（数据库、Redis、Admin 秘钥覆盖）
 AGENTS.md                 项目核心架构约定与上下文文档
 API.md                    完整 API 文档
 CHANGELOG.md              更新日志
@@ -184,8 +163,7 @@ docs/                     历史过程文档与设计规划
 2. **异步流水线处理**：常驻进程 `EventQueueConsumer` 拉取事件 → 执行 `SecurityAuditHandler`（主正文与全部附件敏感规则检测，若违规即刻物理清除日志、记录审计日志并封禁恶意 IP，阻断后续流转）→ 执行 `DeobfuscateHandler`（调用 SpinYarn 原生反混淆并原子回写存储与刷新缓存）→ 异常自动重试，耗尽转入死信流 `events:log:dead`。
 3. **读取**：`GET /v1/raw/{id}`（或子文件路径）→ Redis 缓存查询（如启用）→ 未命中时回源存储 → TTL 续期。
 4. **分析**：`GET /v1/insights/{id}` → 加载日志 → Detective 检测服务端类型与版本 → Codex 引擎解析 → 格式化输出。
-5. **AI 分析**：`GET /v1/ai/{id}` → AI 微队列入队与中继 → LogAgent 工具循环 → LLM 流式推理 → 自主调度 Exa 搜索、RAG 知识检索、日志定位与 GitHub 排障 → SSE 推送思维链与结论。
-6. **删除**：`DELETE /v1/log/{id}` → Bearer Token 鉴权（SHA-256 哈希比对）→ 删除存储与缓存。
+5. **删除**：`DELETE /v1/log/{id}` → Bearer Token 鉴权（SHA-256 哈希比对）→ 删除存储与缓存。
 
 ### ID 编码
 
@@ -205,7 +183,7 @@ composer test:architecture  # Pest 架构约束测试
 composer stan               # PHPStan 静态分析（level 5）
 ```
 
-测试覆盖过滤器、存储、上传解析、MCP 客户端、LogAgent 工具循环、RAG 检索、Controller 集成与架构约束。存储链路的集成测试需要本地 MariaDB 与 Redis（可用 `docker compose -f docker/compose.yaml up -d` 启动）。Termux 环境运行 PHPStan 需加前缀 `PHPSTAN_TURBO=0`。OpenLiteWaf 有独立的回归测试，见 `OpenLiteWaf/README.md`。
+测试覆盖过滤器、存储、上传解析、Codex 分析、EventQueue、Controller 集成与架构约束。存储链路的集成测试需要本地 MariaDB 与 Redis（可用 `docker compose -f docker/compose.yaml up -d` 启动）。OpenLiteWaf 有独立的回归测试，见 `OpenLiteWaf/README.md`。
 
 ### 路由注册
 
@@ -221,16 +199,6 @@ class ExampleController extends AbstractController
 ```
 
 `/{version:v?1}` 前缀同时匹配 `/1/` 与 `/v1/`；路径参数支持 `{param}`（单段）与 `{param:.+}`（含斜杠的通配段，用于子文件名）。
-
-### RAG 知识库
-
-```bash
-php bin/hyperf.php rag:build   # 扫描 rag/knowledge/ 构建 SQLite FTS5 索引
-```
-
-索引构建使用临时数据库，完成后原子替换正式索引，失败时保留旧索引；Docker 部署时 hyperf 容器启动命令会自动执行（幂等）。数据库路径由 `ai.mcp.rag.db` 指定，默认 `rag/index.db`。
-
-知识库为手工维护的诊断资产（`日志分析`/`patterns`/`format`/`android-native-lib`/`mobile_launcher` 五个目录），易过期的启动器实战与各 ModLoader/服务端开发文档已移除，由 LogAgent 的 GitHub 实时排障工具链提供动态支撑；站点运营文案与测试素材位于索引之外。检索切块单元是 `## ` 二级标题，无标题的大文件须手工分段。新增知识目录须同步登记 `RagSearch::TOPIC_DESCRIPTIONS`。召回质量以金标集验收：`php scripts/rag_eval.php`（口径与指标见 `rag/README.md`）。语义 RAG 开启后需重新执行 `rag:build` 生成分块向量。
 
 ## 许可证
 

@@ -1,219 +1,115 @@
 # LogShare — Agent Guide
 
-## Stack and entrypoints
+面向 Minecraft / Hytale 的日志分享与本地 Codex 解析平台；AI 智能诊断已外包给外部服务。仓库主体是 PHP 后端、边缘 Lua 与 Docker 配置，没有前端构建。技术栈：PHP 8.4+ / Hyperf 3.2 / Swoole 6.2 常驻协程、MariaDB 或文件系统、Redis（可选）。完整目录树与用户文档见 `README.md`；API 契约以 `API.md`、`openapi.yaml`、`postman_collection.json` 为准。
 
-- PHP 8.4+, Hyperf 3.2, Swoole 6.2 resident/coroutine server; `bin/hyperf.php` is the CLI entrypoint and `core.php` bootstraps configuration.
-- PSR-4 maps `App\` to `app/`; controllers use Hyperf annotation routes. `App\Controller\AbstractController` provides request parsing and response helpers.
-- HTTP listens on `0.0.0.0:9501`; both deprecated `/1/` and current `/v1/` API routes are supported (a `/{version:v?1}` route prefix matches both). The `/rag` MCP endpoint is served by the same process and accepts loopback requests only unless `ai.mcp.rag.authToken` is configured.
-- Storage is selected by `storage.storageId`: MariaDB (`s`) or filesystem (`f`). Redis is an optional cache/rate-limit dependency.
-- `OpenLiteWaf/` and `OpenLiteStats/` are independent GitHub repos mounted as git submodules — they have their own READMEs, tests, and release lifecycle.
+## 入口与结构
 
-## Project Layout and Key Components
+- `bin/hyperf.php`：CLI 与服务入口；`core.php`：引导并加载 `Config.inc.php`；PSR-4 将 `App\` 映射到 `app/`。
+- HTTP 监听 `0.0.0.0:9501`（`config/autoload/server.php`）。控制器使用 Hyperf 注解路由，前缀 `/{version:v?1}` 同时匹配已弃用的 `/1` 与 `/v1`。
+- 存储由 `storage.storageId` 选择：`s` = MariaDB，`f` = 文件系统；日志 ID 首字符即存储标识。Redis 不是硬依赖，缺失时缓存与队列会降级。
+- `OpenLiteWaf/`、`OpenLiteStats/` 是独立仓库的 git submodule（`cnb.cool/MornZe-Dev/*`），有自己的测试与发布流程；改动需在各自仓库提交，再回主仓更新指针。
+- 参考文档：`OpenLiteWaf/README.md`、`docs/`、`CHANGELOG.md`；`LOCAL_DEV_NOTES.md` 仅本地、被 `.git/info/exclude` 排除，永不提交。
 
-```
-bin/hyperf.php            入口文件（Hyperf Application）
-core.php                  引导文件（定义 CORE_PATH 并加载 Config）
-app/                      核心类库（App\ 命名空间）
-├── Agent/                LogAgent（模型驱动工具循环）与排障工具链
-├── Cache/                Redis 缓存实现与协程连接池
-├── Client/               AI、MCP、GitHub、Redis、SpinYarn 客户端
-├── Command/              Hyperf 命令（rag:build 等）
-├── Controller/           HTTP 控制器（注解路由，含 Log、AI、Admin 控制台等）
-├── Data/                 数据模型（Token、MetadataEntry）
-├── Filter/               预处理过滤链（敏感信息脱敏）
-├── Middleware/           CORS、AdminAuth、限流中间件
-├── Parser/               请求体解码（Brotli / Gzip / Deflate 自动解压与炸弹防护）
-├── Process/              常驻消费者进程（AiQueueConsumer、EventQueueConsumer）
-├── Queue/                统一日志异步事件队列（EventQueue、QueueEvent、DeadLetterQueue、Handler/）
-├── Rag/                  本地 RAG 检索引擎（SQLite FTS5 + 语义向量召回）
-├── Response/             统一响应结构封装（ApiResponse）
-├── Sse/                  SSE 流式输出封装（SseWriter、AnalysisEmitter）
-├── Storage/              持久化存储后端（MariaDbStorage、FilesystemStorage）
-├── System/               系统核心服务（SecurityService、AuditLogManager、TelemetryService、SpinYarnManager、LogPartitionManager 分区回收）
-├── ApiError.php          API 业务异常（ApiExceptionHandler 统一渲染）
-├── Config.php            配置加载器、环境变量覆盖与动态热重载引擎
-├── ContentParser.php     请求正文与启动器特征识别
-├── Detective.php         日志类型与服务端版本探测
-├── UploadParser.php      多文件安全校验与 ZIP 展开引擎
-├── Log.php               日志核心模型与反混淆持久化
-└── Id.php                ID 生成与存储后端编解码
-config/autoload/          Hyperf 框架配置（server、databases、middlewares 等）
-rag/                      内置 RAG：knowledge/ 静态知识库，index.db 索引（构建生成，勿提交）
-docker/                   Compose 编排、nginx 站点配置、镜像构建
-OpenLiteWaf/              边缘 WAF 独立子模块（OpenResty Lua，CC 防御与攻击特征拦截）
-OpenLiteStats/            边缘站点访问统计独立子模块（无锁位图 UV、流量统计与日志分析）
-Config.inc.php            全部配置（gitignored）
-Config.inc.example.php    配置模板
-.env.example              环境变量模板
-AGENTS.md                 项目核心架构约定与上下文文档
-API.md                    完整 API 文档
-CHANGELOG.md              更新日志
-docs/                     历史过程文档与设计规划
-```
-
-## Setup and verification
+## 开发命令
 
 ```bash
-git submodule update --init --recursive   # OpenLiteWaf / OpenLiteStats 以 submodule 引入，clone 或 pull 部署后必须执行
+git submodule update --init --recursive   # clone / pull 后必须
 composer install
 cp Config.inc.example.php Config.inc.php
-
-# Termux (Android) 验证命令：因缺少 /usr/bin/env，直接执行 composer test / composer stan 会报错 127 (pest/phpstan: not found)，必须以 php 调用；若智能体命令沙箱报错 invalid argument，需以 unsandboxed / BypassSandbox 运行：
-php vendor/bin/pest
-php vendor/bin/pest --group=architecture
-PHPSTAN_TURBO=0 php vendor/bin/phpstan analyse app --level=5 --memory-limit=512M
-
-# CI / Ubuntu 环境标准命令：
-composer test
-composer test:architecture
-composer stan
-
-# 启动与索引：
-php bin/hyperf.php list
-php bin/hyperf.php rag:build
 php bin/hyperf.php start
+
+composer test                 # Pest 全量
+composer test:architecture    # 架构约束
+composer stan                 # PHPStan level 5
+php vendor/bin/pest tests/Unit/FilterTest.php
+php vendor/bin/pest --filter=TestName
 ```
 
-- Tests use Pest and bootstrap through `tests/bootstrap.php`; that bootstrap creates `Config.inc.php` when absent and supplies a Redis mock when ext-redis is unavailable. Run one file with `php vendor/bin/pest tests/Unit/FilterTest.php` or filter by name with `php vendor/bin/pest --filter=...`; architecture tests are the `architecture` Pest group (`php vendor/bin/pest --group=architecture` / `composer test:architecture`). `tests/Unit/ControllersUnitTest.php` covers HTTP controllers via direct reflection instantiation to ensure line coverage is captured by PCOV without Hyperf AOP proxy interference.
-- Integration tests need MariaDB and Redis (missing MariaDB locally will skip `MariaDbStorageTest` without failing). CI initializes MariaDB with `docker/mariadb-init.sql` followed by `scripts/sync_mariadb_events.php` and `docker/mariadb-events.sql` so that `cleanup_expired_logs` event checks pass. CI runners include `brotli` extension to fully test compressed requests. `RequestParser::decodeBody` and `ContentParser` decompress brotli via single-argument `brotli_uncompress($body)` and validate against decompressed size limits in application code (ext-brotli second argument is dictionary `?string`, passing integer throws TypeError). `RedisClient::setTestConnection(?object $conn)` enables unit tests (such as `AnalysisQueueTest`) to run deterministically against `RedisMock` regardless of whether `ext-redis` is loaded, eliminating unnecessary skips. Local Docker services are started with `docker compose -f docker/compose.yaml up -d`. CI runs comprehensive live environment integration tests via `scripts/ci_e2e_test.php` against both the booted resident Swoole server (port 9501) and the production Docker stack with Nginx SSL, OpenLiteWaf attack blocking, OpenLiteStats analytics, complete log lifecycle (create/read/raw/files/meta/insights/telemetry/delete/404), and Admin/RAG MCP endpoints. CI 已从 GitHub Actions 迁移到 CNB 云原生构建，配置见 `.cnb.yml` 与 `.cnb/`（详见下方「CNB 流水线」章节）。
-- Lua regression tests (Termux): `php OpenLiteWaf/tests/openlitewaf_regex_test.php`, `lua5.1 OpenLiteWaf/tests/openlitewaf_logic_test.lua`, `lua5.1 OpenLiteStats/tests/openlitestats_logic_test.lua`, `luac5.1 -p OpenLiteWaf/lua/*.lua OpenLiteStats/lua/*.lua`. The two Lua test suites stub ngx and use real file IO under `/data/data/com.termux/files/usr/tmp/` for persistence cases.
-- PHPStan analyzes `app/` at level 5. The existing `ignoreErrors` entries in `phpstan.neon` are intentional (Codex type hierarchy in `app/Log.php`, Hyperf Response `getConnection()` in `app/Sse/SseWriter.php`, whole-file `method.unused` in `app/Agent/LogAgent.php` because its remaining private thin delegates are a reflection-compatibility shell for 40+ legacy reflection tests), and `app/Client/SpinYarnClient.php` is excluded because it depends on the spinyarn PHP extension that is absent in the CI static-analysis environment; do not add suppressions or exclusions casually.
-- There is no configured formatter. Before finishing code changes, run the relevant Pest tests, architecture tests, and `PHPSTAN_TURBO=0 php vendor/bin/phpstan analyse app --level=5 --memory-limit=512M` on Termux.
+- 测试引导在 `tests/bootstrap.php`：自动创建 `Config.inc.php`，未加载 ext-redis 时用 `RedisMock`。单测可离线跑；`tests/Integration` 的部分用例需要 MariaDB / Redis，缺失会 skip。`tests/Unit/ControllersUnitTest.php` 用反射直接实例化控制器，避免 Hyperf AOP 代理干扰覆盖率。
+- 集成环境：先由 `.env.example` 准备 `.env`，再 `docker compose --env-file .env -f docker/compose.yaml up -d`。
+- `RedisClient::setTestConnection()` 可让 Redis 相关单测固定走 `RedisMock`；压缩请求用例需要 ext-brotli（CI 已装）。
+- Lua 回归：`php OpenLiteWaf/tests/openlitewaf_regex_test.php`、`lua5.1 OpenLiteWaf/tests/openlitewaf_logic_test.lua`、`lua5.1 OpenLiteStats/tests/openlitestats_logic_test.lua`、`luac5.1 -p OpenLiteWaf/lua/*.lua OpenLiteStats/lua/*.lua`。两套 Lua 测试 stub 了 `ngx`，只能验证流程/计数/作用域，真实 `ngx.re` 与请求体覆盖在 E2E。
+- 仓库没有配置 formatter；改完代码至少跑相关 Pest、架构测试、PHPStan。`phpstan.neon` 里的 `ignoreErrors` 与 `SpinYarnClient` 排除是刻意保留的（Codex 类型层级、CI 无 spinyarn 扩展），不要随手删。
 
-## Configuration and operational constraints
+## 请求链路
 
-- Copy `Config.inc.example.php` to the gitignored `Config.inc.php`; never commit it or expose its API keys. Database and Redis connection settings can be overridden with `DB_*` and `REDIS_*`; AI settings in `.env` include `AI_ENABLED`, `AI_API_KEYS`, `AI_BASE_URL`, `AI_MODEL`, and JSON `AI_RAG_PROVIDERS`.
-- Do not change `id.characters` or the ID length: existing log IDs depend on them. IDs are seven characters, with `s`/`f` identifying the storage backend.
-- Upload limits are enforced before storage: 10 MB / 50,000 lines, plus at most 200 files and 12 MB total. ZIP uploads must remain protected against traversal and excessive expansion.
-- SpinYarn is optional and only parses mappings already present under `mappings/`; it has no automatic download. The extension and mapping files are primarily handled by the Docker build/bind mount. `spinyarn_init(?string $mappings_dir = null, int $cache_max = 44, int $cache_high = 40, int $cache_low = 30, ?string $redis_url = null)` enables the Redis shared mapping cache only when `redis_url` is non-empty, otherwise every call parses on demand with no cache (there is no local cache of any kind). Extension source is pinned by commit in docker/hyperf.Dockerfile (CNB: MornZe-Dev/SpinYarn, fetch main then checkout $SPINYARN_REF). `SpinYarnClient::supportsRedisArg()` detects the loaded signature via reflection and adapts (v1.0.0 takes 4 params; blindly passing 5 throws ArgumentCountError and the fail-open path then disabled deobfuscation for the whole process, the 2026-09 production incident). `getHandle()` never caches failure: failures are throttled 60s (`$lastFailureAt`) and retried after expiry, successes are reused, and a config hash over mappingsDir + redisUrl + three watermarks rebuilds the handle on change (new handle replaces only on success). Pure helpers `isValidVersion()` / `normalizeMappingType()` / `resolveMappingsDir()` / `buildRedisUrl()` carry validation (version regex allows `-`/`+` suffixes, mapping type no longer defaults to yarn, Redis URL supports optional username with rawurlencoded password, illegal port/database returns null with an error log); `spinyarn.redis_enabled` (default true) gates the URL and `cache.redis.username` supplies ACL users. `deobfuscate()` takes an optional 4th `&$stats` out-param (classes/methods/fields/total_time_ms) and guards `SPINYARN_*` constants with `defined()`. The admin probe accepts `mappingType`/`mapping_type` (camelCase first), validates version/mappingType with 400s and caps content at 256KB; `getStatus()` reports the effective mappings dir, three watermarks, `redisConfigured` (bool only), `redisSupported` and `extensionVersion`, plus a 1–2 version `spinyarn_has_mapping` spot check. Restart the server after swapping the extension .so.
-- RAG knowledge base: hand-maintained diagnostic assets under `rag/knowledge/` (日志分析 / patterns / format / android-native-lib / mobile_launcher); site legal/announcement copy lives in `docs/site/` and crash-report test fixtures in `tests/Fixtures/rag_tools/`, both outside the index. The machine-fetch scripts and the `UPSTREAM_DIRS` whitelist were retired with the move to the GitHub live troubleshooting toolchain. New knowledge directories must be registered in `RagSearch::TOPIC_DESCRIPTIONS` (qualitative descriptions only — no drifting counts), enforced by the bidirectional `topic descriptions cover all knowledge directories` unit test. The retrieval chunk unit is the `## ` second-level heading, so title-less bulk files (version tables) must be hand-segmented (see `rag/README.md`). Recall quality is gated by the gold set: `php scripts/rag_eval.php` (paraphrase tier is the signal; rerun after any knowledge-content or ranking change — a paraphrase hit@5 regression below the `base` variant exits non-zero; not in CI because it needs online embedding; in-CI ranking regressions are locked by `tests/Unit/RagFusionTest.php` pure-computation cases). Enabling semantic RAG requires re-running `php bin/hyperf.php rag:build` (builds into a temp SQLite DB, then atomically replaces `rag/index.db`; failures keep the old index).
-- Swoole is a resident process: process-level caches and extension handles survive requests. Restart the server after changing parsing/deobfuscation behavior or other process-level state. The hyperf image runs every process under jemalloc (`LD_PRELOAD=...libjemalloc.so.2` + `MALLOC_CONF` fast decay): glibc malloc never returns a resident process's peak RSS after connection-sized frees fragment the heap top, which made the queue consumer plateau at 1.4GB on the 3.6GB host; jemalloc's decay-based purge keeps RSS near live size. Keep both ENVs when editing the Dockerfile.
-- The Docker MariaDB init script runs only for a new database volume. MariaDB runs Event Scheduler and `mariadb-events` applies the generated `cleanup_expired_logs` SQL; `scripts/sync_mariadb_events.php` reads `Config.inc.php` as the sole TTL source, including on existing volumes. MariaDB healthcheck verifies the event exists and is enabled. Production Compose reads secrets from the gitignored `.env`; `MARIADB_PASSWORD`, `MARIADB_ROOT_PASSWORD`, and `REDIS_PASSWORD` must be supplied consistently to Hyperf, MariaDB, Redis, and MariaDB Event services. Non-secret application settings remain in `Config.inc.php`. AI is disabled by default and configuration validation requires `AI_ENABLED=true`, `AI_API_KEYS`, `AI_BASE_URL`, and `AI_MODEL`; semantic RAG additionally requires valid JSON `AI_RAG_PROVIDERS` entries with embedding configuration; vector recall is primary and lexical results supplement it.
-- Admin API (`/{version:v?1}/admin/*`): gated by `admin.enabled` and protected by `App\Middleware\AdminAuthMiddleware` (timing-safe check against `admin.token`, overridable via `ADMIN_ENABLED` and `ADMIN_TOKEN`). Docker deployment mounts host `runtime/` to `/app/runtime` and host `OpenLiteWaf/data/` to `/app/OpenLiteWaf/data:ro` (`docker/compose.yaml`) to persist runtime state and allow WAF snapshot telemetry. Endpoints include `GET /logs` (paginated querying via `StorageInterface::List`/`Count`, keyword/source/time filters), `GET /logs/{id}` (full detail without token), `DELETE /logs/{id}` (forced admin deletion without deletion token), `POST /logs/batch-delete` (criteria-based batch deletion with limit safety), `GET /security/bans` (active banned IPs from Redis & OpenLiteWaf), `POST /security/ban` & `POST /security/unban` (manual IP ban/unban with dual-layer Redis/JSON persistence; unban additionally calls the edge `POST /security/unban` on nginx when `OPENLITEWAF_ADMIN_TOKEN` is configured, otherwise the WAF-side ban is left to its TTL), `GET /security/overview` (WAF attack metrics & categories, with multi-path snapshot probing, schema normalization, and internal cURL fallback), `GET/PUT /security/content-rules` (hot content rejection keywords & regex rules persisted to `runtime/content_reject_rules.json` and dual-written to `dynamic_config.json`), `GET /analytics/sources` (client/launcher source distribution), `GET /analytics/versions` (Minecraft version and mod loader matrix; primary source is `log_metadata` keys `version`/`loader` auto-derived server-side at upload time by `Log::deriveEcosystemMetadata()`, with log header & mod list heuristic recognition as fallback only when metadata is absent), `GET /analytics/trends` (log volume & size time-series trends over whole natural days starting at the earliest day's local midnight, with average log size estimated from an in-window 300-row sample to eliminate table-scan timeouts), `GET /system/storage-health` (physical database table sizes, filesystem disk space and Redis memory diagnostics), `POST /system/cleanup-expired` (manual trigger for expired log cleanup), `POST /system/cache/flush` (pattern-based cache eviction), `GET /system/queue` (AI queue metrics), `GET /ai/metrics` (AI throughput, duration percentiles, token estimates & topic hits; `ragCalls` and `topics` are counted at the RAG service landing point `RagController` rag_search branch — `topics` derives from the directory of each returned hit, NOT from the model-supplied `topic` argument, which is usually absent and would keep the chart empty), `GET /ai/queue/inspect` (deep queue inspection, active workers, pending jobs & dead letters), `POST /ai/queue/pause` & `POST /ai/queue/resume` (manual consumer pause/resume control), `POST /ai/queue/flush` (safe queue backlog clearing), `POST /ai/queue/dead/clear` (dead jobs purge), `GET/POST /ai/domain-knowledge` & `PUT/DELETE /ai/domain-knowledge/{id}` (已知领域知识条目管理，单条严格限制 ≤200 字并直接拼接入系统提示词，LLM 自身无写权限亦不走 Tools，作为强制先验规则), `GET /ai/analyses`（分析记录分页检索，支持模式/评分/时间多维过滤与统计）、`GET /ai/analyses/{cacheKey}`（单条分析完整 trace + score + validation + toolCallChain）、`GET /ai/analyses/{cacheKey}/trace`（导出单条 trace JSON）、`DELETE /ai/analyses/{cacheKey}`（安全删除分析记录与缓存）、`GET /ai/scoreboard`（四维质量评分概览与趋势看板）、`GET /ai/scoreboard/slow`（慢分析耗时排行与调优排查）、`GET /ai/scoreboard/low-score`（低分告警分析列表）、`GET/POST /ai/prompts`（Prompt 版本清单 / 从当前版本 Fork 派生新版本）、`GET/PUT/DELETE /ai/prompts/{promptVersion}`（获取完整提示词 / 更新提示词片段 / 删除版本）、`POST /ai/prompts/{promptVersion}/activate`（激活指定 Prompt 版本毫秒级跨进程热生效）、`GET /ai/tools`（已注册 9 大排障工具状态清单）、`PUT /ai/tools/{name}/enable`（在线启用/禁用排障工具门控）、`PUT /ai/tools/{name}/config`（工具重试与 Fallback 链配置）、`GET /ai/modes` & `PUT /ai/modes/{mode}`（deep / launcher / quick 排障模式参数可视化配置）, `GET /system/stats` (system and runtime stats), `GET/PUT /config` (masked inspection and dynamic hot-reload configuration persisting to `runtime/dynamic_config.json`; `App\Config::ensureFresh()` detects `filemtime`, `filesize`, and microsecond string version in Redis across Swoole resident worker processes to hot-reload in milliseconds without restarting workers; `Config::load()` incorporates `Config.inc.example.php` as baseline to ensure legacy configs expose all modern sections in admin UI), `POST /config/reset`, `POST /config/test-ai` (connectivity probing with custom headers support) / `POST /config/test-rag-provider` (connectivity probing), `GET /rag/stats` (knowledge base chunks/embeddings and topic map), `POST /rag/build` & `GET /rag/build/status` (async rebuild persisting status to `runtime/rag_build_status.json`), `GET/PUT /rag/config` (检索链路能力开关 chunker/rerank/queryRewrite/incrementalBuild/semanticCache/telemetry，白名单式逐字段局部合并后跨进程热生效；rerank 支持 `type=llm`（复用主分析模型 listwise）与 `type=http`（专用 cross-encoder 端点，`POST {baseUrl}/rerank`，Cohere/Jina/SiliconFlow/vLLM/Xinference 约定，响应兼容 `results[].relevance_score` 与裸数组 `[].score`），`baseUrl` 拒绝私网地址、回环需显式 `allowLoopback`，`apiKey` 读取只回显掩码并由 `Config::restoreMaskedSecrets()` 回填), `POST /rag/test-rerank` (以两条固定文档探测精排端点，失败仍返回 200 且 `success=false`), `GET /rag/build/stale` (按文件 mtime 比对知识库与索引差异，索引未构建返回 409) & `POST /rag/build/incremental` (仅重索引 changed/missing 文件), `GET /rag/telemetry` (按自然日的分阶段检索耗时与命中聚合，summary 为 Redis hash 原样透出、未启用阶段的键直接缺席，消费方须区分「未采集」与「计数为零」；`?slow=1` 附慢查询明细), `POST /rag/search` (diagnostic recall), RAG document CMS endpoints `GET /rag/topics`, `GET /rag/docs` (topic/keyword filters), `GET /rag/docs/content`, `POST /rag/docs/save` (create/update), `DELETE /rag/docs` (safe deletion), `POST /rag/docs/upload` (multipart/JSON upload, 5MB limit, strict path traversal and extension whitelisting), SpinYarn mapping and probe endpoints `GET /spinyarn/status` & `POST /spinyarn/test` (mapping library inventory and online deobfuscation test), high-risk operation audit logging `GET/DELETE /audit/logs` (persisted via Redis ring buffer and `runtime/logs/audit.log` with action, keyword, and time range filtering), telemetry endpoints `GET/DELETE /telemetry/stats` (client-side metrics dashboard and aggregation reset; public report endpoint at `POST /{version}/telemetry/report` with raw body fallback parsing for beacon/non-JSON clients), and system diagnostics `GET/DELETE /system/logs` (paginated querying via Redis ring buffer `syslog:recent` falling back to `runtime/logs/system.log`, level/keyword filters, and safe clear). `ai.headers` supports custom HTTP headers (also overridable via `AI_HEADERS` env) for upstream gateway compatibility (e.g. OpenRouter, Cloudflare), with credential masking/unmasking.
-- LogAgent 深度排障与架构重构机制（`app/Agent/`）：
-  - 核心架构拆解与解耦：原 `LogAgent` 彻底重构拆解为单一职责体系，涵盖 `AgentRuntime`（多轮 tool loop 引擎，分层停止条件）、`ToolRegistry` / `ToolFactory`（统一工具注册、调用与门控）、`PromptBuilder` / `PromptManager`（提示词版本化与动态拼接）、`LogWindowManager`（动态聚焦崩溃上下文行）、`ResultValidator`（结构化结论验证与未核实声明标注）、`AnalysisScorer`（工具效率/证据充分性/结论明确性四维评分）、`AnalysisTracer`（完整执行链路 Trace 记录与 JSON 导出）、`AnalysisRecordManager`（基于 Redis ZSET 与本地归档的分析记录持久化存储）。
-  - 三种分析模式（AnalysisMode）：支持 `deep`（深度排障，默认 50 轮上限与全工具链）、`launcher`（启动器崩溃优先，20 轮上限与 GitHub/RAG 优先）、`quick`（极速单轮直答）。
-  - 结构化输出与前台渲染：诊断正文末尾附带严格校验的结构化 JSON 输出块（根因、置信度、排障清单、证据追踪），前台客户端自动解析并渲染为核心卡片。
-  - 深度因果与线索查找硬性约束：重构系统提示词与思维链（CoT）策略，明确复杂日志绝非仅看表象错误。除非报错原因极其明确孤立无需上下文（如纯物理内存不足或单点孤立 Java 主版本不匹配），否则模型【必须至少进行一次日志上下文线索查找】（使用 `read_log_file` 读取报错前后上下文行区间、检索 `crash-reports` 崩溃报告附件、或调用 `grep_log_file` 追踪前置异常链与模组初始化状态），探明真正诱因；严禁仅凭初始截取的单点错误切片草率适可而止或放弃工具。
-  - 管理员已知领域知识强行拼接：由运维团队在后台增删改查已知业务规则与排障先验知识（落盘 `runtime/domain_knowledge.json` 并同步 Redis 缓存，单条 ≤200 字），在组织分析提示词时直接拼接入系统提示词段落『已知领域知识』，LLM 自身无写权限且不走动态 Tools 读取，形成权威业务约束。
-- Client IP resolution and application security: Public rate limiting and DDoS defense are handled by Nginx/OpenLiteWaf at the edge. Application-layer real client IP resolution is centralized in `SecurityService::resolveClientIp()` using strict trusted-proxy verification (`security.trustedProxies` / `rateLimit.trustedProxies` / RFC 1918 private subnets and loopback addresses); untrusted public origins cannot spoof `X-Real-IP` or `X-Forwarded-For`. All public write/analysis endpoints (`LogController`, `AnalyseController`, `AIAnalyseController`) enforce `checkIpBan()` (supporting exact IP and CIDR subnets against Config, Redis, local JSON and OpenLiteWaf snapshot). 违规关键词与正则表达式采用 AES-256-GCM 对称加密存储（密文标识 `enc:v1:<base64(iv.tag.cipher)>`），密钥由环境变量 `SECURITY_ENCRYPTION_KEY`、配置或自动生成存盘于 `runtime/.security_secret`（0600 权限保护），`runtime/content_reject_rules.json` 及 `dynamic_config.json` 磁盘落盘严格全量密文存储，杜绝敏感词泄露；`Config::validate()` 自动解密后再进行正则表达式语法校验，Admin 控制台则解密后友好呈现。
-- 统一日志异步事件队列（EventQueue，`app/Queue`）：
-  - 极速上传解耦：用户上传日志（`LogController::create`）彻底移除同步阻塞的 SpinYarn 反混淆和全量文本关键词正则审核，仅保留快速 `preFilter()` 并执行 `$this->analyse()` 轻量 Codex 分析（探测版本与元数据），数据落库（Storage::Put）后立即派发 `EventQueue::EVENT_LOG_UPLOADED` 事件并毫秒级向客户端响应 200 JSON 成功结果。
-  - 事件模型与发布订阅注册中心：引入强类型事件模型 `QueueEvent`（封装事件名称、UUID、尝试次数 `attempts`、最大重试 `maxAttempts`、时间戳与 `stopPropagation()` 阻断控制）；`EventQueue::register(eventName, handler, priority)` 支持按优先级降序调度自定义监听器，所有处理器实现 `EventHandlerInterface`（标准解耦，支持实例、类名与闭包注入），支持动态挂载新任务（如索引、通知、Webhook 等）。
-  - 调度中心与降级保障：`EventQueue::dispatch()` 优先将事件序列化并投递至 Redis Stream（键名 `events:log:stream`，消费组 `log-event-workers`，近似裁剪上限 10000 条）；若 Redis 未配置或不可用，在 Swoole 协程环境下自动派发子协程异步执行，在 CLI/单测环境下同步降级执行，保证 100% 健壮可用；内置实时指标监控 `EventQueue::getStats()` 与吞吐计数。
-  - 异常重试策略与死信队列（DeadLetterQueue / DLQ）：消费者执行异常时若重试次数未耗尽将保留待决由退避协程重试；达到 `maxAttempts` 上限后自动将事件、原始载荷、失败堆栈转存入死信流 `events:log:dead` 并安全出队，杜绝毒丸永久阻塞；Admin 控制台支持查看死信（`GET /v1/admin/event-queue/dead`）、重试重放（`POST /v1/admin/event-queue/dead/retry`）、清空（`DELETE /v1/admin/event-queue/dead`）以及队列运行概览（`GET /v1/admin/event-queue/stats`）。
-  - 队列指标口径：消费成功后 `XACK` + `XDEL`，因此 `streamLength`/`backlog` 稳态恒为 0，面板不得据此判定队列空转；累计吞吐以消费组 `entries-read`（`getStats()` 输出为 `entriesRead`，需 Redis 7.0+）与 `counters` 计数为准，`consumers` 给出当前组内消费者数。`counters` 分 `processed_success` / `processed_blocked` / `processed_failed` 三口径：异步安全审核命中违规并阻断流转（日志已删除、来源已封禁）计入 `processed_blocked`，属预期治理结果，不再污染 `processed_failed`；`getStats()` 对 Redis 检视失败的静默 `catch` 已改为 `\App\Syslog::error()` 记录。
-  - 异步安全审计与反混淆流水线：`SecurityAuditHandler` 提取主日志正文与附加文件（`Log::getRawFiles()`）执行规则检测，若违规即刻物理删除日志及缓存（`$log->delete()`）、阻断后续流转（`stopPropagation`）、记录 `security.async_reject` 高危操作审计日志，并自动封禁非私网恶意来源 IP；`DeobfuscateHandler` 对未混淆/支持的日志调用 SpinYarn 并通过统一的 `StorageInterface::Update()` 与 `Log::updateContent()` 完成反混淆持久化与 Redis 缓存原子回写。
-  - 常驻事件消费者进程：`EventQueueConsumer`（继承 `AbstractProcess`，注解 `#[Process(name: 'event-queue-consumer')]`，由 `isEnable()` 受控启动），在进程内派生固定命名消费协程（`worker-0`, `worker-1`）拉取流事件，按 Pipeline 调度执行，成功或安全阻断后立即执行 `XACK` 与 `XDEL` 杜绝流积压；后台协程周期性（30s）执行 `XAUTOCLAIM` 回收异常崩溃超时的待决条目；支持两阶段排空（30s 宽限期）与三重自回收策略（累计处理 ≥1000 任务、OS 真实物理常驻内存 VmRSS ≥256MB 或空闲 ≥180s），退出后由 Swoole manager 自动重新拉起干净进程重置 RSS。
-- AI analysis micro-queue (`ai.queue`, default off): when enabled, ALL `/v1/ai/*` analyses run in the `ai-queue-consumer` custom process (registered via the `#[Process]` annotation on `App\Process\AiQueueConsumer`, gated by `isEnable()`; Hyperf 3.x `processes.php` expects process instances, not 2.x array configs) and the HTTP handler only relays the job's Redis Stream frames. `maxConcurrent` consumer coroutines bound upstream quota; `maxQueue` is the queue-depth cap — depth is real backlog (`XINFO GROUPS` lag + pending for the `ai-analysers` group, NOT `XLEN` which counts cumulative entries and would cause permanent 429 after enough traffic; before the group exists it falls back to XLEN), full returns 429 + `Retry-After` before SSE begins; `waitTimeout` bounds the relay wait and `0`/negative means no timeout (wait until done/error or client disconnect, in which case `jobTtl` alone is the job lifetime via `AnalysisQueue::jobLifetime()`); a client disconnect does not cancel the job (result still cached); `failOpen` (default true) falls back to inline execution when Redis is unavailable. Jobs carry the log content in a short-TTL gzip payload key (never in the Stream itself) and are deduped per cache key via `ai:job:active:*`; crashed consumers are recovered by XAUTOCLAIM (`claimIdleMs`) with a per-job running lock preventing double execution. Stream has MAXLEN cap (`max(1000, maxQueue * 4)`) on `xAdd` and completed/dropped entries are physically removed via `xDel`, preventing unbounded Stream growth. Consumers use fixed names (`worker-0`, `worker-1`) without PID suffixes to prevent stale consumer pileup (historical 191 stale consumers incident), and `cleanStaleConsumers` automatically purges orphaned consumers with 0 pending. Reclaim loop enforces dead letter defense (max 3 deliveries per entry before dropping + ACK + XDEL), and missing-payload terminations deduplicate terminal error frames. Consumer memory management: per-job `gc_collect_cycles()` and `gc_mem_caches()` curtail zend_alloc heap fragmentation; self-recycle runs on a triple-condition (processed ≥500 jobs regardless of idle as hard cap, or OS resident VmRSS ≥256MB reading `/proc/self/status` avoiding Zend MM metric delusion, or idle ≥180s with processed ≥50; enters two-phase graceful drain stopping new Redis stream reads, waits for active jobs to complete with a 30s deadline, and exits for Swoole manager restart to reset RSS — solving the concurrent job overlapping deadlock and memory leak incident). Emission goes through `App\Sse\AnalysisEmitter` (`SseEmitter` = inline, `StreamEmitter` = queue; both produce byte-identical SSE frames) — the active emitter lives in Hyperf context, never a plain static. Enabling the queue requires ext-redis + `cache.redis` and a server restart; PHP changes to the consumer require rebuilding the hyperf image.
-- Docker build versions are pinned in `docker/hyperf.Dockerfile`; the standard Compose deployment exposes Nginx on ports 80/443, its config is `docker/nginx/default.conf`, TLS certificates are mounted read-only from the gitignored `docker/certs/` directory, and ACME HTTP-01 challenges use `docker/acme/`.
-- Edge WAF: `OpenLiteWaf/` is a standalone OpenResty-Lua project (submodule) running inside the nginx container (image `openresty/openresty:1.27.1.2-alpine`, not stock nginx).
-  - Entry points are `access_by_lua_file` / `log_by_lua_file` / `content_by_lua_file` in `docker/nginx/default.conf`; http-level lua directives live in the mounted `OpenLiteWaf/nginx/nginx.conf` (`lua_shared_dict openlitewaf` + `openlitestats`, `lua_package_path`, `init_by_lua_block`, `init_worker_by_lua_block`).
-  - Public stats page: `/security` (HTML), `/security/stats` (JSON summary) and `/security/logs` (JSON, attack logs paginated 50/page, ring buffer of 500). Public log entries mask IPs and blank `token=` params; "banned IP count" is an approximation via ring slots (shared dict cannot enumerate keys). Each log entry records which rule fired and on which object (`rule` + `via` = uri/path/ua/body) — never the matched snippet, so request bodies cannot leak through the public page. `/security/stats` additionally exposes `ban_reasons` (keys like `probe#57` / `cc`, `?` for bans restored from a pre-1.3.0 snapshot).
-  - Rule matching is scoped per rule via an optional third table element (`uri` / `path` / `ua` / `body`, space-separated; omitted = all objects). Path-shaped probe signatures (`.php`, `/.git/`, `/cgi-bin/`, sensitive-file extensions) MUST stay `uri`/`path`: filenames such as `main.log`, `config.yml` or `phpmyadmin` appearing in a POST body or User-Agent are just text (shared logs, knowledge-base docs, frontend telemetry) and matching them used to ban legitimate clients' IPs for 600s. Injection/XSS/traversal/RCE rules keep scanning the body. An unparseable scope token degrades that rule to "all objects" and logs to the nginx error log rather than silently disabling it.
-  - Signatures match raw request_uri, fully decoded request_uri (incl. query), normalized uri, User-Agent, and request body (POST/PUT/PATCH; requests with Content-Length >2MB are skipped, chunked bodies are always scanned; first 64KB only). `body_exempt_prefixes` skips body scanning entirely for endpoints that ingest arbitrary user text: `/v1|/1/log`, `/v1|/1/ai/analyse`, `/v1|/1/analyse`, `/v1|/1/telemetry` (the Web-UI SDK reports every fetched URL in `endpoint`), `/v1|/1/admin` (knowledge-base Markdown and prompt text). The exemption covers the body only — URI and UA are still matched. Raw file endpoints `/{version}/raw/{id}/{filename}` bypass the extension rule via `is_raw_file_request`. Categories: sqli/xss/traversal/rce/probe.
-  - CC defense returns 429 with `Retry-After` and does NOT write the ban key: the per-window counter key keeps throttling within the window and self-clears in the next one, and CC is not evidence of an attack, so a CGNAT egress must not be blackholed. Signature hits return 403 and increment a per-IP strike counter (`s:<ip>`, window `sig_strike_window`); the IP is only banned after `sig_strikes` (default 3) hits, which caps the blast radius of one false positive at a single 403 instead of 10 minutes of site-wide 403s. `blocked_total` counts every refusal while category counters only count judged hits — their difference is ban-window repeats, and that gap widening is the signal of a new false positive.
-  - The CC threshold must stay below the nginx `limit_req` rate (30r/s in `location /`), or requests get 503-dropped by limit_req before OpenLiteWaf ever sees them; that linkage only holds for reverse-proxied traffic, since the `location =` entries served by Lua (`/security`, `/stats`) have no `limit_req` and are governed by CC alone.
-  - Runtime unbanning goes through the privileged Lua endpoints `POST /security/unban?ip=` and `GET /security/bans` (443 server only), authenticated by the `X-OpenLiteWaf-Token` header against the `OPENLITEWAF_ADMIN_TOKEN` env var, which must be declared with a main-context `env` directive in `OpenLiteWaf/nginx/nginx.conf` for `os.getenv` to see it. Unset/short token ⇒ 404 (fail-closed); comparison is non-short-circuiting. The handler deletes `b:<ip>`, the strike counter, the CC window keys AND the `bs:/br:/bx:` slots, then rewrites the snapshot immediately — clearing only the ban key lets the 60s snapshot re-persist it and `init_by_lua` resurrects it on restart. Bans survive `docker restart` for the same reason. The PHP side (`SecurityService::syncUnbanToWaf`) calls it over internal HTTPS; it no longer edits `snapshot.json`, and `OpenLiteWaf/data` stays `:ro` in the app container on purpose.
-  - Data persists via a 60s snapshot written by worker 0 to the read-write mounts `/data/openlitewaf` (host `OpenLiteWaf/data/`, gitignored) and restored in `init_by_lua`; if the dir is unwritable it degrades to in-memory mode. deny() sets `ngx.ctx.olw_blocked` which OpenLiteStats uses to exclude blocked requests.
-  - Rules and CC thresholds are in `OpenLiteWaf/lua/openlitewaf.lua`; changes take effect only after the nginx Lua VM re-reads them — `git pull` alone does NOT apply, and in the current deployment `docker exec logshare-nginx nginx -s reload` is UNRELIABLE (the container's nginx pid file points at a stale master PID, so the HUP never reaches the running master; verified 2026-08-30). Use `docker restart logshare-nginx` instead — snapshot persistence means counters/bans/logs now survive restarts (≤60s data loss window), so restarting is NOT a way to clear a wrong ban.
-  - `OpenLiteWaf/tests/openlitewaf_regex_test.php` and `OpenLiteWaf/tests/openlitewaf_logic_test.lua` are the regression tests for rules and logic. The PHP suite parses `RULES-BEGIN/END`, fails when a declared rule is silently unparsed, validates scope tokens, and takes a per-sample `kind` (uri/ua/body); the Lua suite stubs `ngx.re` so it can only assert flow/counting/scoping, never regex correctness — real ngx.re + body coverage lives in `scripts/ci_e2e_test.php --waf-test`.
-- Site analytics: `OpenLiteStats/` is a second standalone submodule (https://github.com/anylyralabs/OpenLiteStats) in the same nginx container.
-  - It records PASSED requests in the log phase (`log_by_lua_file .../lstats/log.lua`; bytes_sent is only available there): requests, outbound bytes, unique IPs (64K bitmap + linear counting, daily reset), hourly buckets, plus top endpoints/referers (host only, stripping basic auth credentials)/UAs and a 20-entry recent list aggregated at view time from a 1000-entry ring buffer; IPs are masked (IPv4 two octets, IPv6 first 3 hextets expanding `::` abbreviation to `top3::*`), URI has no query.
-  - Pages: `/stats` (HTML) and `/stats/data` (JSON). `CONFIG.exclude_prefixes` = `/security`, `/stats`, `/v1|/1/telemetry`, `/v1|/1/admin` are excluded from ALL counters (the check runs before counting, the UV bitmap and the ring buffer), matching the fact that telemetry is machine traffic from half of all requests and admin polling is operational traffic. Exclusion is path-segment bounded (`/v1/administrator` is counted, `/v1/admin/logs` is not) and `starts_with` rejects an empty prefix, since an empty entry would silently zero the whole site's stats. CORS preflight `OPTIONS` is skipped in `record()`.
-  - Top-endpoint keys are templated at aggregation time only (`/v1/raw/{id}/main.log` → `/v1/raw/:id/main.log`, ≥16-hex cacheKeys → `:hash`) using the same ID definition as `TelemetryService::cleanEndpoint` (1 storage char + 6 alnum chars, and the segment itself must contain a digit so 7-letter routes like `preview`/`backups` are not folded); the `recent` list keeps raw paths for per-instance debugging.
-  - Persistence mirrors the WAF: 60s snapshot from worker 0 to the `OpenLiteStats/data/` mount (`/data/openlitestats`), restored in `init_by_lua`. Its `lua_shared_dict openlitestats 32m` lives in `OpenLiteWaf/nginx/nginx.conf`.
-  - Regression test: `lua5.1 OpenLiteStats/tests/openlitestats_logic_test.lua`.
+- 上传：`POST /v1/log` → `RequestParser` 解压 → `UploadParser` 校验 / ZIP 展开 → `Log::put()` 内的 `preFilter` + Codex 轻量分析 + 存储 → `EventQueue::dispatch(EVENT_LOG_UPLOADED)` → 立即 200。耗时安全审核与 SpinYarn 反混淆在 `EventQueueConsumer` 异步执行。
+- 读取：`GET /v1/raw/{id}[/{filename}]` → Redis 缓存 → 存储回源并续期。`DELETE /v1/log/{id}` 校验 Bearer 删除 token（库里只存 SHA-256）。
+- 管理端：`/{version}/admin/*` 由 `AdminController` 集中承载，鉴权见下。
 
-## 分区与去重架构（MariaDB 空间回收）
+## 存储 / ID
 
-- **根因**：InnoDB 的 `DELETE` 只会在 `.ibd` 文件内部留下空洞并等待复用，**永不把空间归还操作系统**，磁盘占用单调递增直至爆满。实测删除 171MB 数据后磁盘占用纹丝不动（200MB → 200MB）。唯一能真正归还空间的手段是 `DROP PARTITION`（直接删除分区的 `.ibd` 文件），而 `OPTIMIZE TABLE`/`FORCE` 需要约等量的临时磁盘空间，在磁盘将满时反而不可用。
-- **结构**：`logs` / `log_files` / `log_metadata` 三表均按 `created` 做**天级 RANGE 分区**（`docker/mariadb-init.sql`），另保留 `p_future`（`VALUES LESS THAN MAXVALUE`）兜底分区承接未覆盖的行——**缺少兜底分区会让新写入直接以 `Table has no partition for value` 失败**。
-- **分区表硬性约束**（MariaDB，违反即 ERROR 1506）：分区表不支持外键，原 `ON DELETE CASCADE` 已全部移除，**级联删除必须由 `MariaDbStorage` 显式完成**（先子表后父表），漏删任一张表都会留下孤儿行；所有唯一键（含主键）必须包含分区键，故主键为 `(id, created)` / `(log_id, name, created)` / `(log_id, key, created)`。
-- **子表 created 必须与父表一致**：分区回收按同一 `created` 边界进行。`Renew()` 已同步更新子表 `created`，否则父子行落入不同分区，父表分区被丢弃后子表残留成为永久无法回收的孤儿数据（`MariaDbStorageTest::testRenewKeepsChildTablesInSync` 守门）。
-- **历史分区只在安装时铺一次**：DDL 的分区边界必须是编译期常量，`scripts/sync_mariadb_events.php` 在**生成 SQL 时**把 `[今天-TTL, 今天]` 的边界固化成字面量并写入 `docker/mariadb-events.sql`。**运行期严禁重建历史窗口**——过期分区会被正常丢弃，此时补建会与幸存的较新分区重名（ERROR 1517），形成「丢弃→重建→冲突」死循环。运行期不再做任何 REORGANIZE，只做 DROP；跨天延伸靠重跑生成脚本并重装事件（mariadb-events 容器重建即重装）。
-- **分区名哨兵判据**：判断历史区间是否已建过时，用「最靠近今天的那个历史分区」是否存在，**不要用分区计数**——过期分区被丢弃后计数必然少于期望值，会被误判为「未建过」而触发重名冲突。
-- **有符号比较陷阱**：`information_schema.PARTITIONS.PARTITION_DESCRIPTION` 是无符号列，与有符号 `cutoff` 比较会发生类型提升，负 cutoff 被提升为巨大无符号数，导致「没有任何分区可丢弃」且**不报任何错误**，清理静默失效。存储过程与 SQL 侧一律写 `CAST(PARTITION_DESCRIPTION AS SIGNED) <= v_cutoff`；`v_cutoff` 也必须声明为 `BIGINT SIGNED`。
-- **DROP 必须逐个执行**：同一会话内 `information_schema.PARTITIONS` 在 DDL 之后可能返回陈旧视图，批量拼接的分区列表会混入已被丢弃的分区名，使整条 `ALTER` 语法失败（ERROR 1064）并作废该表本次清理。存储过程因此逐个分区「查一个丢一个」，并设 400 次上限防止陈旧视图导致的无界循环卡死 Event Scheduler。
-- **两层清理路径**：`MariaDbStorage::CleanupExpired()`（Admin 手动触发）与存储过程 `logshare_cleanup_expired()`（`cleanup_expired_logs` 事件，每小时）共用同一套逻辑——直接 `DROP PARTITION`、最后 `cleanupStrays()` 按行回收滞留在 `p_future` 的过期数据（兜底分区无法按子区间 DROP；这批数据通常极少，仅分区维护中断期间写入）。
-- **分区只按整日回收**：`DROP` 条件是分区上界 ≤ cutoff，因此跨越 cutoff 当天的分区会保留到次日。这是刻意的保守设计（分区可能仍含未过期数据），代价是空间回收有最多一天的滞后。
-- **部署迁移**：结构不兼容（主键变更 + 移除外键），旧库需清空重建：`php scripts/migrate_partitioned_storage.php --yes`，随后 `php scripts/sync_mariadb_events.php` 并重启 `mariadb-events` 容器。脚本带 `--yes` 保护与幂等判据（已是分区结构且含 `fingerprint` 列则直接退出）。
-- **改 `storage.storageTime` 后**必须重新执行 `scripts/sync_mariadb_events.php` 并重启 `mariadb-events` 容器，否则历史分区窗口与清理边界仍是旧 TTL。
-- **去重指纹**：`MariaDbStorage::fingerprint()` 用 `xxh128`（非加密哈希，速度约为 SHA-256 的十倍量级，10MB 正文开销在毫秒级）计算「正文 + 附加文件（按名称排序，顺序无关）+ source」。`Put()` 先按 `idx_fingerprint` 等值匹配（一次 B-tree 定位，与日志总量无关，故可安全放在上传关键路径），命中则直接返回既有 ID，不再写入新行。旧库缺列时静默降级为不去重，绝不阻断上传。
-- **观测**：`GET /v1/admin/system/storage-health` 现返回 `dataFreeBytes` / `fragmentationRatio` / `partitions`（各表日分区数、覆盖边界、`p_future` 占用、`largestFreePartition` 空闲指向）。注意 `fragmentationRatio` 在小数据量下天然偏高（InnoDB extent 预分配，实测 86 行零删除即 0.39），以 `dataFreeBytes` 绝对值与趋势为准；空闲集中在活跃分区属健康，散落旧分区才是真空洞。
+- 日志 ID 固定 7 位：首字符 `s`（MariaDB）或 `f`（文件系统）+ 6 位随机。不要改 `id.characters` 或 `id.length`，已有 ID 全依赖它们。
+- 上传限制在落库前强制执行：10 MB / 50,000 行，最多 200 个文件、合计 12 MB；ZIP 必须继续防路径穿越与膨胀炸弹。
+- `logs` / `log_files` / `log_metadata` 按 `created` 做天级 RANGE 分区，必须保留 `p_future` 兜底。分区表不能有外键，级联删除由 `MariaDbStorage` 显式完成（先子表后父表）；所有唯一键都必须包含 `created`；`Renew()` 必须同步子表 `created`，否则父表分区丢弃后会留下永久孤儿行。
+- 过期清理只 `DROP PARTITION`。运行期绝不重建历史分区（会与幸存分区重名，ERROR 1517）；判断历史区间是否已铺过，用「最靠近今天的历史分区」而非分区计数；SQL 里 `PARTITION_DESCRIPTION` 必须 `CAST(... AS SIGNED)`，否则负 cutoff 静默失效；DROP 必须逐个执行（`information_schema` 陈旧视图会拼出已删分区名，ERROR 1064）。
+- 改 `storage.storageTime` 后必须 `php scripts/sync_mariadb_events.php` 并重启 `mariadb-events` 容器。旧库结构不兼容，迁移用 `php scripts/migrate_partitioned_storage.php --yes`：它会 DROP 三表并重建，现有日志全丢，执行前先确认已备份。
+- 上传去重按「正文 + 按名称排序的附件 + source」计算 `xxh128`，命中直接返回旧 ID；旧库缺 `fingerprint` 列时静默降级，不要阻断上传。
+- `GET /v1/admin/system/storage-health` 的 `fragmentationRatio` 在小数据量下天然偏高，看 `dataFreeBytes` 绝对值/趋势与 `largestFreePartition`。
 
-## Implementation rules that are easy to miss
+## 控制器 / API
 
-- `AnalysisRecordManager::list()` 默认把 `pageSize` 夹到 100（HTTP 侧的 DoS 防护，不得放宽或透传请求参数）；内部聚合调用方（`getScoreboard()`）必须显式传入放宽的 `$maxPageSize` 上限并按全量结果计算均值与计数，否则统计口径会静默退化为「只统计最新 100 条」——该缺陷曾让 `totalAnalyses` 恒为 100 且 `days` 参数失效，由 `AdminAiTest` 的回归用例守门。
-- Controllers must use injected PSR-7 requests, `ContentParser`, storage abstractions, and `AbstractController` helpers; do not read `$_SERVER`, `$_GET`, or `$_POST`, and do not issue raw SQL from controllers. Architecture tests enforce this.
-- FastRoute does NOT url-decode route parameters (verified: `dispatch` returns `ai%3Aanalysis%3A…` verbatim). Analysis cache keys are colon-bearing (`ai:analysis:<logId>` / `ai:analysis:hash:<sha256>`) and the admin console sends them percent-encoded, so any controller taking such a path parameter must decode it first — `AdminController::decodePathKey()` exists precisely because the analysis detail/trace/delete endpoints 404'd while the list worked. Unit-test new key-carrying routes with the encoded form.
-- `SecurityService::getWafOverview()` is a whitelist projection of the WAF JSON: a new OpenLiteWaf field is invisible to the admin console until it is explicitly added there (this is how `ban_reasons` would have been lost). Likewise `unbanIp()` returns `waf_sync` (`ok` / `skipped` / `failed` / `invalid`) because an app-layer unban does not clear an edge ban — the console must not report a flat "已解封".
-- Controllers receiving JSON or structured input must parse requests via `$this->getParsedBody()` provided by `AbstractController`: it prioritizes the framework's `$request->getParsedBody()` and automatically falls back to raw stream JSON deserialization if the upstream client sends non-JSON Content-Type (e.g. `text/plain` from default `fetch`).
-- Throw `App\ApiError` for expected API failures; `ApiExceptionHandler` renders the API error response.
-- Client IP resolution (`SecurityService::resolveClientIp`): strictly adheres to configured `trustedProxies` (overriding implicit trust); traverses `X-Forwarded-For` from right to left to peel off trusted proxies and extract the outermost untrusted IP, completely eliminating header spoofing; `RateLimitMiddleware` passes full request headers to `resolveClientIp` ensuring proxy clients are not coalesced into loopback.
-- AES-256-GCM rules encryption: key generation enforces 0600 permissions at temporary creation with atomic rename and collision resolution; decryption failure throws RuntimeException instead of silently falling back to ciphertext, preventing malformed ciphertext from polluting runtime keyword filtering chains.
-- EventQueue & DLQ: retry counts are tracked and persisted in Redis (`events:attempts:{$id}`) with TTL protection; when retries exhaust, `DeadLetterQueue::push` return is strictly verified before `xAck` and `xDel`, preventing silent event drops.
-- `RedisClient`: explicitly configures `OPT_READ_TIMEOUT` (10s default) exceeding consumer blocking wait times (2s/5s) to eliminate periodic socket disconnection storm.
-- Container startup: `docker/hyperf.Dockerfile` entrypoint explicitly wipes stale mounted annotation container cache (`rm -rf /app/runtime/container;`) before scanning and booting, preventing route 404 and proxy discrepancy.
-- Apply configured pre-filters before storage. Deletion tokens are stored hashed; plaintext tokens are returned only by the upload response.
-- Use `App\Syslog::error()` for diagnostics, not raw `error_log()`.
-- SSE output must go through `App\Sse\AnalysisEmitter` (`SseEmitter` inline / `StreamEmitter` queued), which writes via `App\Sse\SseWriter`; request-scoped stream state (including the active emitter) belongs in Hyperf context rather than a plain static.
-- AI tool calls remain model-controlled; do not force a RAG call in `LogAgent` when the model returns no tools. AI routes are 404 when `ai.enabled` is false.
-- `LogAgent` 初始分析日志上下文（首轮发给模型的日志）：当日志总长度 < 12KB 时不触发定位算法，完整内容直传 user message；当日志总长度 ≥ 12KB 时统一触发错误特征定位正则（与前端 logParser 对齐的 Tier 1 根因/堆栈与 Tier 2 失败谓词体系），若定位到错误行则以此为核心截取 12KB 聚焦窗口（预留约 2.5KB 前置因果与完整后置堆栈，整行对齐）塞入 user message；若未定位到任何显式错误，绝不盲目截取开服前缀日志塞入 user message，而是向模型提供日志概况、提示基础常用的 grep 关键词（ERROR、FATAL、Exception、Caused by、crash 等），并引导模型遵循“适可而止”思维链开展 1~2 轮定向探测，若无异常即客观输出结论，避免无休止调用。
-- `LogAgent` 提供日志文件关键词检索工具 `grep_log_file`（类似 grep），仅在绑定日志 ID 时开放；支持指定 `filename`（默认 `main`）、`query`、`case_sensitive`、`context_lines`（0–5，默认 1）和 `max_matches`（1–30，默认 10）；行号按总行数字符宽度左填充对齐，命中行标记 `>`，上下文行标记空格，相邻或重叠行区间自动合并；单次工具输出放宽至 32KB（与 RAG 检索一致），状态摘要提取首行概况及命中行标记。
-- `LogAgent` 集成 GitHub 启动器/渲染器排障工具链：提供 `github_list_repos`、`github_search`、`github_get_content` 三大工具（受 `github.enabled` 开关控制），替代易过期的静态启动器与渲染器实战 issue 知识库；支持通过 `github.tokens` 或 `GITHUB_TOKENS` 配置多 Personal Access Token，内置轮询均衡、Rate-Limit 状态感知与 403/429 自动冷却故障转移（Failover）；结合 Redis 缓存（搜索 1h、详情 24h）规避 GitHub 限流；提示词核心原则强调所有 Tools 包括知识库都仅为辅助日志分析手段，并非必须依赖或每轮必调，通读日志足以形成结论时直接输出；提示词明确指出知识库大分类层级对检索并无太大作用，切勿纠结分类或强行匹配目录，遇到报错时直接提取日志中的 Java Error 直接报错摘要（如 `Caused by:` 后的异常类名、报错消息文本、关键错误特征等）作为关键词直接检索；静态知识库精简聚焦于常见报错分析（`patterns`、`日志分析`）、日志格式速查（`format`）、Android 原生库（`android-native-lib`）以及手机启动器常识与 Minecraft 版本更新列表（`mobile_launcher`），移除了易过期的启动器实战与各 ModLoader/服务端开发文档，改由 GitHub 实时排障工具链提供动态支撑。
-- External HTTP / cURL calls (`AIClient`, `MCPClient`, `SemanticClient`, `GitHubClient`) in resident Swoole processes must set `CURLOPT_FORBID_REUSE => true` and explicitly release the handle (`$ch = null`) in a `finally` block to close sockets immediately; omitting this causes socket FD accumulation and "Too many open files" (EMFILE) outages under continuous traffic. Do not configure cURL options unsupported by Swoole coroutine hooks (such as `CURLOPT_MAXFILESIZE` / option 114, which throws an unsupported exception and breaks batch processing; enforce payload caps in application code instead).
-- Request bodies supporting `Content-Encoding` (`br`/`gzip`/`deflate`/`zlib`) for JSON requests are handled via `App\Parser\RequestParser` (registered as Hyperf's `RequestParserInterface` in `config/autoload/dependencies.php`) to automatically decompress raw streams before sub-parsers run, with a 20MB decompression cap (`MAX_DECOMPRESSED_BYTES`) to prevent decompression bombs. `App\ContentParser` similarly supports `br`, `gzip`, and `deflate` with configured payload caps.
-- Server response compression: Swoole HTTP Server settings configure `'http_compression' => true` (level 6, min_length 1024), which automatically and preferentially responds with Brotli (`Content-Encoding: br`) whenever the client sends `Accept-Encoding: br` (defaulting to gzip when absent).
-- OpenResty compression configuration: `OpenLiteWaf/nginx/nginx.conf` and `docker/nginx/default.conf` configure `gzip on` (comp_level 6, `gzip_proxied any`) as baseline fallback, and `docker/nginx/default.conf` sets `proxy_set_header Accept-Encoding $http_accept_encoding` to ensure client compression capabilities reach upstream. Brotli directives (`brotli on; brotli_comp_level 6; ...`) are pre-configured; when running on container images with `ngx_brotli` loaded, uncomment the `brotli` block to enable edge-layer compression. Independent of whether `ngx_brotli` is loaded in OpenResty, Hyperf upstream responses natively deliver Brotli compression end-to-end via proxy pass-through.
-- 客户端接入与上传规范：客户端（各类启动器生态）上传时强烈建议同时提交「游戏主日志 + 崩溃报告 + 启动器日志」（通过 `files` 数组或 ZIP 归档），并注明 `source` 来源标识（格式如 `pojav/3.4.0`、`fcl/1.2.0`、`zl2/2.1.0` 等）；若请求体未显式提交 `source`，服务端自动从 HTTP `User-Agent` 中提取并过滤规范的“启动器/版本”结构（排除通用浏览器与通用 HTTP 客户端黑名单）；若未提供且 UA 非启动器格式，统一标为 `'未指定'`（存储与 Admin 检索统一兜底为 `'未指定'`，支持按 `source=未指定` 联合过滤 NULL、空串与未指定记录）；使 Admin 控制台能精准分类与检索启动器生态来源；上报公开遥测（`POST /{version}/telemetry/report`）支持 raw body 与 Beacon 兜底解析。
-- If an API route or response changes, update `API.md`, `openapi.yaml`, and `postman_collection.json` together.
+- 控制器只用注入的 PSR-7 请求、`ContentParser`、Storage 抽象与 `AbstractController` 助手；禁止读 `$_SERVER` / `$_GET` / `$_POST`，禁止控制器内直接发 SQL（架构测试会挂）。
+- 所有控制器必须继承 `AbstractController`；新增 Filter / Storage / Cache 类必须实现对应接口，架构测试会校验命名空间与继承关系。
+- JSON / 结构化输入一律用 `$this->getParsedBody()`；它兼容 `text/plain` 等非 JSON Content-Type 的裸 JSON。预期业务失败抛 `App\ApiError`，由 `ApiExceptionHandler` 统一渲染。
+- 管理接口由 `admin.enabled` + `AdminAuthMiddleware`（timing-safe token）保护；旧版 `ai` / `github` 配置段会在 `Config::load()` 中丢弃，避免遗留密钥泄露。WAF 概览是 `SecurityService::getWafOverview()` 的白名单投影，新增字段必须同步，否则后台看不到；解封返回 `waf_sync`，不要笼统报“已解封”。
+- Admin 配置读取会对密钥打码；PUT 走 `Config::saveDynamic()`，它用 `restoreMaskedSecrets()` 回填 `******`，不要绕过它直接写动态配置。
+- 违规关键词 / 正则使用 AES-256-GCM 密文落盘（`enc:v1:...`），密钥来自 `SECURITY_ENCRYPTION_KEY` 或 `runtime/.security_secret`（0600）；不要改成明文存储，也不要吞掉解密失败异常。
+- 客户端真实 IP 只信 `security.trustedProxies` / `rateLimit.trustedProxies`；`X-Forwarded-For` 从右往左剥离受信代理。`RateLimitMiddleware` 目前未注册（中间件链上只有 `CorsMiddleware`），且 Redis 故障路径为 503 fail-closed，启用前先确认。
+- 改路由或响应必须同步 `API.md`、`openapi.yaml`、`postman_collection.json`。
 
-## CNB 流水线（CI / E2E / Release）
+## 事件队列
 
-CI 已从 GitHub Actions 迁移到 CNB 云原生构建，配置拆分如下。`.github/workflows/` 目前仍保留：git-sync 会把 main 推回 GitHub 镜像仓库，因而那套工作流仍会被触发；是否删除待用户决定（见下方「已知差异」）。
+- `LogController::create` 只做快速 `preFilter` + 轻量 Codex 分析 + 落库，然后派发事件并立即响应；耗时操作在 `EventQueueConsumer`（进程名 `event-queue-consumer`）中执行。异步审核命中违规会物理删除日志、阻断后续 handler 并封禁来源 IP。
+- 成功即 `XACK` + `XDEL`，所以 `streamLength` / `backlog` 稳态恒为 0，不能据此判断空转；看消费组 `entriesRead` 与 `counters`。违规阻断计入 `processed_blocked`，不是 `processed_failed`。
+- 重试耗尽入死信 `events:log:dead`；入队前必须确认 `DeadLetterQueue::push` 成功再 `XACK` / `XDEL`，避免静默丢事件。
+- `EventQueue::dispatch()` 在 Redis 不可用时协程内异步降级、CLI/单测同步降级；不要把 Redis 当硬依赖。
+- `EventQueueConsumer` 用固定 worker 名并周期性 `XAUTOCLAIM` 回收崩溃条目；两阶段排空与自回收逻辑不要删，否则 stale consumer 与 RSS 会累积。
 
-| 文件 | 职责 |
-| --- | --- |
-| `.cnb.yml` | include 三份子配置 + GitHub 代码同步（git-sync，push main 时） |
-| `.cnb/ci.yml` | 单测/覆盖率、composer 校验、PHPStan、架构测试、Swoole 启动冒烟 |
-| `.cnb/docker-e2e.yml` | 生产镜像构建 + docker compose 全栈真实环境 E2E |
-| `.cnb/release.yml` | `[Build]` 提交触发 Release |
-| `.cnb/Dockerfile.ci` | CI 构建环境镜像（PHP 8.5 + Swoole 6.2 + pcov） |
-| `scripts/ci_init_mariadb.sh` | CI 用 MariaDB 结构与事件初始化 |
-| `scripts/clover_to_lcov.php` | Clover → LCOV 覆盖率转换 |
+## SpinYarn（可选反混淆）
 
-平台机制约束（都是踩过的坑，改配置前务必先读 `.cnb/ci.yml` 顶部注释）：
+- 只解析 `mappings/` 中已有映射，不自动下载；扩展缺失、版本不支持或初始化失败时原样透传（fail-open）。
+- `spinyarn_init(...)` 只有 `redis_url` 非空才启用 Redis 共享映射缓存；否则每次按需解析，没有本地缓存。
+- `SpinYarnClient::supportsRedisArg()` 通过反射区分 4 参与 5 参签名；v1.0.0 直接传 5 参会 ArgumentCountError。新增调用必须走它，不要假设扩展支持 Redis 参数。
+- 初始化失败 60s 节流后重试；成功句柄复用，配置 hash（mappingsDir + redisUrl + 三水位）变化时重建，且新句柄成功才替换。
 
-- **`include` 在「分支 + 事件」层合并**：子配置各自写 `main:` / `pull_request:`，不要试图用 `!reference` 把整条流水线数组塞进主文件 —— 实测 CNB runner 1.73.0 下 `push: !reference [.xxx]` 会静默产出**空流水线**（构建成功但零 stage）。属性级引用（`docker: !reference [.ci-docker]`）正常。
-- **`script` 由 sh（dash）执行**，不是 bash：`set -o pipefail` 会直接以退出码 2 失败，统一用 `set -eu`。
-- **`services` 只支持 docker / vscode**，没有 mariadb / redis 服务容器，需自行 `docker run`。
-- **dind 容器与流水线容器网络不互通**：流水线容器既连不上 `127.0.0.1`（端口发布发生在 dind 自己的网络命名空间），也连不上服务容器的 `172.18.x.x`。唯一可行做法是让测试容器 `--network logshare-ci` 加入与服务容器相同的自定义网络，用容器名做 DNS。
-- **CNB 会预构建 `docker.build` 指定的 Dockerfile** 并推入制品库缓存；Stage 里再跑一次 `docker build` 会因缓存包冲突而立即失败，改用 `${CNB_PIPELINE_DOCKER_IMAGE}` 取已构建镜像的 tag。
-- **`docker:27-cli` 里没有 `curl`、没有 `openssl`**：就绪探测用 busybox `wget`，证书生成借 `alpine/openssl` 容器。
-- **Stage 的 `if` 不继承**：前一个 Stage 被 `if` 跳过时后续 Stage 照常执行，门控必须写在真正做事的那个 Stage 上（Release 的两处 `if` 由此而来）。
-- **`mariadb-events.sql` 含 `DELIMITER $$` 存储过程**，只能由 mysql/mariadb 客户端导入，PDO `exec()` 会报 ERROR 1064。
-- **覆盖率格式**：Pest 只出 clover/cobertura/crap/html/php/text/xml，而 `testing:coverage` 只认 lcov/coverage.json/jacoco/golang，因此经 `scripts/clover_to_lcov.php` 中转。
-- **已知差异（待决策，两项）**：
-  1. `.github/workflows/{ci,release}.yaml` 未删除。CNB 的 git-sync 会把 main 推回 `anylyralabs/LogShare`，因此 GitHub Actions 仍会被触发，形成两套 CI 并行（含重复的失败）。删不删取决于该镜像仓库是否还要独立跑 CI。
-  2. `scripts/ci_init_mariadb.sh` 刻意剔除 `CALL logshare_install_partitions()`，因为 `MariaDbStorageTest::testAllLogTablesArePartitionedWithFallback` 假设表上只有 `p_future`，与安装期铺满的 14 天未来分区冲突（REORGANIZE 报 ERROR 1493）。该断言写于「运行期补齐分区」时代（见提交 `559d65e`），在 GitHub Actions 上同样会失败。按用户要求迁移期不改动 PHP 与测试，故把差异隔离在 CI 初始化环节。
+## 运行时 / 部署
 
-## Release and submodule workflow
+- Swoole 是常驻进程：进程级缓存、扩展句柄、注解代理类都跨请求存活。改解析 / 反混淆 / 进程状态后必须重启，不能只改文件。
+- 常驻进程外呼 cURL 一律 `CURLOPT_FORBID_REUSE => true`，并在 `finally` 中 `curl_close` / `$ch = null`，否则 FD 累积到 EMFILE；不要用 Swoole 协程 hook 不支持的选项（如 `CURLOPT_MAXFILESIZE`），在应用层限制载荷。
+- `RedisClient` 显式设置 `OPT_READ_TIMEOUT`（默认 10s，高于消费者 2s/5s 阻塞等待），不要调低，否则会周期性断连。
+- 诊断日志用 `App\Syslog::error()`，不要直接 `error_log()`。
+- 请求体解压统一走 `App\Parser\RequestParser`（20 MB 上限）；brotli 用单参 `brotli_uncompress($body)`，第二参是字典，传整数会 TypeError。
+- 响应压缩由 Swoole `http_compression`（level 6、min 1024）优先 Brotli；nginx 只做 gzip 兜底并透传 `Accept-Encoding`。
+- 配置统一走 `App\Config::Get()`；Admin 的动态修改落 `runtime/dynamic_config.json` 并跨 worker 热生效，不要在进程启动时缓存一份配置副本。
+- Docker 部署中 PHP 代码烘进 hyperf 镜像，改 PHP 必须重建镜像；`Config.inc.php`、`.env`、`mappings/`、`runtime/` 是挂载。重建前先 `rm -rf runtime/container` 清扫描缓存（尤其 `SCAN_CACHEABLE=true`）。
+- Compose 的必填密码变量用 `${VAR:?}`，命令带 `--env-file .env`；`docker compose down -v` 会删 `logshare-mariadb-data` / `logshare-redis-data`，不要执行。
+- 镜像内的 jemalloc（`LD_PRELOAD` + `MALLOC_CONF`）是为常驻进程 RSS 回落，改 Dockerfile 时保留。
 
-- Version constant lives in `app/Version.php` (`App\Version::VERSION`); keep `README.md` and `openapi.yaml` version fields aligned when bumping.
-- Release flow: add a `## x.y.z — date` entry at the top of `CHANGELOG.md`, align `app/Version.php` / `README.md` / `openapi.yaml`, then commit with a message starting with `[Build]` — `.cnb/release.yml` 在该前缀下触发发布，tag（`v` + 版本号）与 Release notes 均取自 CHANGELOG 首条。
-- Submodule commit order matters: `OpenLiteWaf/` and `OpenLiteStats/` are separate GitHub repos (anylyralabs org). Commit and push the change inside the submodule repo FIRST, then update the submodule pointer in this repo as a separate commit (`chore: 更新 OpenLiteWaf submodule 指针（…）` is the established style).
-- PHP code is baked into the Docker image (only `Config.inc.php`, `.env`, `mappings/` are mounted): server-side PHP changes require rebuilding the `hyperf` image, not just a container restart. Compose commands need `--env-file .env` (required `${MARIADB_PASSWORD:?}` interpolation). 重建前若宿主机挂载了 `runtime/` 且开启了 `SCAN_CACHEABLE: "true"`，必须先执行 `rm -rf runtime/container` 清理扫描缓存，避免旧容器代理类锁死导致新代码不生效。
+## 边缘 WAF / 统计（submodule）
 
-## 与用户的协作约定（不可省略）
+- WAF 入口在 `docker/nginx/default.conf` 的 `access_by_lua_file` 等；http 级指令在 `OpenLiteWaf/nginx/nginx.conf`（shared dict、`init_by_lua`）。容器镜像是 `openresty/openresty:1.27.1.2-alpine`，不是 stock nginx。
+- 路径形态的探测规则（`.php`、`/.git/`、敏感文件扩展名）必须限定 `uri` / `path`；放宽到 body / UA 会封正常客户端。接收任意文本的端点做 body 豁免：log、analyse、telemetry、admin（URI / UA 仍匹配）。body 只扫前 64KB，`Content-Length > 2MB` 跳过（chunked 仍扫）；`/{version}/raw/{id}/{filename}` 通过 `is_raw_file_request` 绕过扩展名规则。
+- CC 超限返回 429 + `Retry-After` 且不封 IP；特征命中返回 403，并按 `sig_strikes`（默认 3）累计才封。CC 阈值必须低于 nginx `limit_req`（30r/s），否则请求先被 503。
+- 封禁与计数 60s 快照，重启后恢复；`docker exec logshare-nginx nginx -s reload` 在本部署不可靠，改 Lua 后用 `docker restart logshare-nginx`。重启不能清误封，走带 `OPENLITEWAF_ADMIN_TOKEN` 的 `POST /security/unban`（未配置 token 或长度不足时 404 fail-closed）。
+- `OpenLiteStats` 记录通过请求，排除 `/security`、`/stats`、`/telemetry`、`/admin`；排除按路径段边界匹配，空 prefix 会关闭全站统计。热门端点聚合时模板化 ID，IP 脱敏，`OPTIONS` 不计。
 
-- 使用简体中文与用户交流与推理；术语可保留英文，但表述须以中文为准。
-- 开发环境是 Termux（Android）：系统 `/tmp` 只读，临时文件一律使用 `/data/data/com.termux/files/usr/tmp/` 或项目根 `tmp/`；遇兼容性问题先用 WebSearch 检索，仍无法确定时向用户确认，不得直接执行未经验证的操作。
-- 编写后端或前后端交互代码时，对 SQL 注入、XSS、CSRF、路径遍历、敏感信息泄露保持警惕；发现潜在风险须明确告知用户并征询处理意见，不得擅自忽略或掩盖。
-- 严禁破坏用户全局环境；任何可能影响系统稳定性、数据完整性或安全性的危险操作，必须事先征得用户明确授权。
-- 不懂就问、不妄加揣测：与文档或用户意图有出入时先确认再动手。
-- 本文档是项目上下文的唯一约定来源：修改内容与之不符时，同步更新本文档。
-- 文档与文案要求书面化的开发者文档风格（平铺直叙、不该省的字眼不要省），禁止营销腔与卖点罗列。
-- `/security` 拦截页的卡片组件设计（橙色 #ea580c、三角形 SVG、"我们认为您的请求是恶意的"）是用户亲自提供的设计，改动前先征询。
-- 生产环境是 api.logshare.cn（服务器上直接改过 `docker/nginx/default.conf` 的域名与证书路径，仓库内仍是 api.test.logshare.cn，该差异是否合入待用户决定，不要擅自"修正"）；仓库即线上，用户会直接在服务器上改文件，改动时注意同步。
-- `LOCAL_DEV_NOTES.md` 是仅存本地的会话恢复笔记（被 `.git/info/exclude` 排除，永不提交），包含线上 SSH 环境、fish shell、容器名等运维细节，可参考但不可提交。
+## CI / 发布
+
+- CI 在 CNB：`.cnb.yml` include `.cnb/{ci,docker-e2e,release}.yml`。`ci` 跑 Pest + 覆盖率、composer validate、PHPStan、架构测试、Swoole 启动冒烟；`docker-e2e` 构建生产镜像并跑全栈 E2E；`release` 由 `[Build]` 提交触发。
+- 平台坑：子配置按「分支 + 事件」合并，整条流水线数组不能用 `!reference`（会静默产出空流水线）；`script` 由 sh/dash 执行，用 `set -eu`，不要用 `pipefail`；`services` 只有 docker/vscode，MariaDB/Redis 需自行 `docker run`，且 dind 与流水线容器网络不通（用同一自定义网络 + 容器名）；`docker:27-cli` 没有 curl/openssl；Stage 的 `if` 不继承，门控写在真正执行任务的 Stage 上。
+- `docker.build` 指定的 Dockerfile 由 CNB 预构建并缓存；Stage 里不要再跑一次 `docker build`（会因缓存包冲突立即失败），用 `${CNB_PIPELINE_DOCKER_IMAGE}` 取已构建镜像。
+- 覆盖率先 `--coverage-clover` 再用 `scripts/clover_to_lcov.php` 转 LCOV；`mariadb-events.sql` 含 `DELIMITER` 存储过程，只能由 mysql/mariadb 客户端导入。
+- `.github/workflows/` 仍在：CNB 会把 main 同步回 GitHub 镜像仓库，Actions 仍会触发；`scripts/ci_init_mariadb.sh` 刻意剔除 `CALL logshare_install_partitions()` 以匹配既有分区测试，改动前先读脚本注释。
+- 版本单一来源是 `app/Version.php`。发版时改 `CHANGELOG.md` 首条并同步 `README.md` / `openapi.yaml`，提交信息以 `[Build]` 开头；tag 与 Release notes 取自 CHANGELOG 首条。
+- submodule 先在自身仓库提交推送，再回主仓更新指针（沿用 `chore: 更新 OpenLiteWaf submodule 指针（…）`）。
+
+## 协作约定
+
+- 用简体中文交流与推理；术语可保留英文。
+- 开发环境是 Debian 13 容器（不是 Termux）：`/tmp` 可写，临时文件可用 `/tmp/` 或项目根 `tmp/`；兼容性问题先查证，拿不准先问。
+- 涉及 SQL 注入、XSS、CSRF、路径遍历、敏感信息泄露时，先说明风险并征询处理意见，不得擅自忽略或掩盖。
+- 任何可能破坏全局环境、数据完整性或安全性的操作（清库、`docker compose down -v`、重启生产等）必须先取得明确授权。
+- 生产是 `api.logshare.cn`；服务器上的 `docker/nginx/default.conf` 域名与证书路径与仓库（`api.test.logshare.cn`）不同，是否合入等用户决定，不要擅自“修正”。仓库即线上。
+- `/security` 拦截页卡片（橙色 `#ea580c`、三角 SVG、“我们认为您的请求是恶意的”）是用户亲自提供的设计，改前先问。
+- 文档与文案用书面化开发者风格，平铺直叙，不写营销腔；本文件是项目上下文约定来源，行为变更时同步更新。

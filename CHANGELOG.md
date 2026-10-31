@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.8.4 — 2026-11-01
+
+### 移除
+
+- **AI 智能诊断整体剥离**：移除 LogAgent、Agent 工具链、AI 分析微队列、SSE 输出层、AI 指标与领域知识管理；`/v1/ai/*`、`/v1/admin/ai/*`、`/v1/admin/system/queue` 及相关配置接口不再注册，统一返回 404。AI 功能由外部服务承接。
+- **RAG 子系统剥离**：移除本地 SQLite/FTS5/Semantic 检索、RAG MCP `/rag` 端点、RAG 命令与知识库数据，以及 `/v1/admin/rag/*` 管理接口。
+- **配置与构建清理**：移除 `ai`、`github` 配置段与 `AI_*`、`GITHUB_*` 环境变量；镜像不再安装 `pdo_sqlite`，容器启动不再构建 RAG 索引。旧 `Config.inc.php` 或 `dynamic_config.json` 中的 `ai`/`github` 段会在加载时丢弃，避免遗留密钥通过管理接口暴露。
+
+### 保留
+
+- Codex 本地日志解析能力：`POST /v1/analyse`、`GET /v1/insights/{id}`，以及上传时的格式/版本识别。
+- 日志上传、存储、读取、删除、过滤、遥测、EventQueue、SpinYarn 反混淆、Admin 非 AI 管理功能与边缘 WAF/统计。
+
 ## 1.8.3 — 2026-10-13
 
 ### 新增
