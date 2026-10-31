@@ -42,7 +42,7 @@ class Config
 
         self::applyEnvironmentOverrides($data);
         self::applyDynamicOverrides($data);
-        // AI/Agent/RAG 已移除：旧 Config.inc.php 或动态配置中的密钥不得再暴露
+        // 旧版已移除的 ai/github 段不得再通过管理接口暴露
         unset($data['ai'], $data['github']);
         // Example 配置中的占位符（如 '${REDIS_PASSWORD}'）在非 Docker 部署下不会
         // 被替换，占位符形态一律视为未配置，避免拿字面量去 AUTH Redis

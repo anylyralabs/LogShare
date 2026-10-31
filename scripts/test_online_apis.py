@@ -52,16 +52,12 @@ endpoints = [
     ("GET", "/v1/admin/analytics/sources", None, None, "Admin 客户端来源分析"),
     ("GET", "/v1/admin/analytics/versions", None, None, "Admin 游戏版本分析"),
     ("GET", "/v1/admin/analytics/trends?hours=24", None, None, "Admin 趋势分析"),
-    ("GET", "/v1/admin/system/queue", None, None, "Admin AI 队列指标"),
-    ("GET", "/v1/admin/ai/metrics", None, None, "Admin AI 性能吞吐与耗时"),
-    ("GET", "/v1/admin/ai/queue/inspect", None, None, "Admin AI 队列深度审计"),
     ("GET", "/v1/admin/event-queue/stats", None, None, "Admin 事件队列概况"),
     ("GET", "/v1/admin/event-queue/dead?limit=10", None, None, "Admin 死信队列列表"),
     ("GET", "/v1/admin/audit/logs?limit=10", None, None, "Admin 操作审计日志"),
     ("GET", "/v1/admin/telemetry/stats", None, None, "Admin 遥测统计聚合"),
     ("GET", "/v1/admin/system/logs?limit=10", None, None, "Admin 系统诊断日志"),
     ("GET", "/v1/admin/config", None, None, "Admin 配置读取 (脱敏)"),
-    ("GET", "/v1/admin/ai/domain-knowledge", None, None, "Admin 领域知识列表获取"),
 ]
 
 print("\n=== 开始全面测试线上 API ===")
@@ -95,72 +91,25 @@ for method, path, headers, body, desc in endpoints:
 
 print(f"\n基础只读端点: 通过 {passed} 项, 失败 {failed} 项")
 
-print("\n=== 深度验证: 领域知识 (Domain Knowledge) API ===")
-# 1. POST 带 Content-Type
-payload_json = json.dumps({"content": "测试条目：PojavLauncher崩溃切换gl4es渲染器", "enabled": True})
-status, res_body = request("POST", "/v1/admin/ai/domain-knowledge", {"Content-Type": "application/json"}, payload_json)
-print(f"POST /v1/admin/ai/domain-knowledge (with Content-Type) -> {status} | body: {res_body}")
-
-created_id = None
-try:
-    j = json.loads(res_body)
-    if j.get("success") and "data" in j:
-        created_id = j["data"].get("id")
-except:
-    pass
-
-# 2. POST 不带 Content-Type（前端默认 fetch 行为）
-status, res_body = request("POST", "/v1/admin/ai/domain-knowledge", {}, payload_json)
-print(f"POST /v1/admin/ai/domain-knowledge (NO Content-Type) -> {status} | body: {res_body}")
-
-# 3. GET 再次获取列表
-status, res_body = request("GET", "/v1/admin/ai/domain-knowledge")
-print(f"GET /v1/admin/ai/domain-knowledge -> {status} | body: {res_body}")
-
-if created_id:
-    # 4. PUT 更新
-    put_json = json.dumps({"content": "更新条目：PojavLauncher切换gl4es", "enabled": False})
-    status, res_body = request("PUT", f"/v1/admin/ai/domain-knowledge/{created_id}", {"Content-Type": "application/json"}, put_json)
-    print(f"PUT /v1/admin/ai/domain-knowledge/{created_id} -> {status} | body: {res_body}")
-
-    # 5. DELETE 删除
-    status, res_body = request("DELETE", f"/v1/admin/ai/domain-knowledge/{created_id}")
-    print(f"DELETE /v1/admin/ai/domain-knowledge/{created_id} -> {status} | body: {res_body}")
-
-print("\n=== 深度验证: 修改 LogAgent 工具调用轮次配置 ===")
-# 读取当前配置
+print("\n=== 深度验证: 配置修改 ===")
 status, res_body = request("GET", "/v1/admin/config")
 raw_json = json.loads(res_body)
 current_cfg = raw_json.get("data") if isinstance(raw_json.get("data"), dict) else raw_json
-current_rounds = current_cfg.get("ai", {}).get("agent", {}).get("maxToolRounds")
-print(f"当前配置中的 maxToolRounds: {current_rounds}")
+current_storage_time = current_cfg.get("storage", {}).get("storageTime")
+print(f"当前配置中的 storageTime: {current_storage_time}")
 
-# 更新配置为 25 轮
-update_payload = json.dumps({
-    "ai": {
-        "agent": {
-            "enabled": True,
-            "maxToolRounds": 25,
-            "maxFileLines": 60000,
-            "maxFileBytes": 10485760
-        }
-    }
-})
+update_payload = json.dumps({"storage": {"storageTime": 604800}})
 status, res_body = request("PUT", "/v1/admin/config", {"Content-Type": "application/json"}, update_payload)
 print(f"PUT /v1/admin/config (with Content-Type) -> {status} | body: {res_body[:150]}")
 
 status_no_ct, res_body_no_ct = request("PUT", "/v1/admin/config", {}, update_payload)
 print(f"PUT /v1/admin/config (NO Content-Type) -> {status_no_ct} | body: {res_body_no_ct[:150]}")
 
-# 重新读取验证
 status, res_body = request("GET", "/v1/admin/config")
 raw_json = json.loads(res_body)
 updated_cfg = raw_json.get("data") if isinstance(raw_json.get("data"), dict) else raw_json
-updated_rounds = updated_cfg.get("ai", {}).get("agent", {}).get("maxToolRounds")
-print(f"修改后配置中的 maxToolRounds: {updated_rounds}")
+print(f"修改后配置中的 storageTime: {updated_cfg.get('storage', {}).get('storageTime')}")
 
 print("\n=== 深度验证: 前端 CORS OPTIONS 预检 ===")
-status, res_body = request("OPTIONS", "/v1/admin/ai/domain-knowledge")
-print(f"OPTIONS /v1/admin/ai/domain-knowledge -> {status}")
 status, res_body = request("OPTIONS", "/v1/admin/config")
 print(f"OPTIONS /v1/admin/config -> {status}")

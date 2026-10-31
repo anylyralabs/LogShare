@@ -85,7 +85,7 @@ final class StorageHealthService
     /**
      * 手动清空或按前缀清理 Redis 缓存。
      *
-     * @param ?string $prefix 缓存前缀，如 'log:*', 'ai:*', 或 'all'
+     * @param ?string $prefix 缓存前缀，如 'log:*' 或 'all'
      * @return array{cleared: bool, deletedKeys: int, prefix: string}
      */
     public static function flushCache(?string $prefix = null): array

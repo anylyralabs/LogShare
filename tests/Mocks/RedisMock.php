@@ -271,7 +271,7 @@ class RedisMock
         return $new;
     }
 
-    /* ─── Streams（AI 微队列测试用，语义按最小实现） ─── */
+    /* ─── Streams（统一事件队列测试用，语义按最小实现） ─── */
 
     public function xadd(string $key, string $id, array $values, ?int $maxlen = 0, bool $approx = false, bool $nomkstream = false): string
     {

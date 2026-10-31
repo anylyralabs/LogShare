@@ -109,10 +109,11 @@ test('Config ensureFresh prevents recursive loop and works safely with Redis cli
 });
 
 test('AdminController config endpoints work properly', function () {
-    $ctrl = new AdminController();
+    $ref = new ReflectionClass(AdminController::class);
+    $ctrl = $ref->newInstanceWithoutConstructor();
     $psr7Req = new Request('GET', '/v1/admin/config');
     \Hyperf\Context\Context::set(\Psr\Http\Message\ServerRequestInterface::class, $psr7Req);
-    $reqRef = new ReflectionProperty($ctrl, 'request');
+    $reqRef = $ref->getProperty('request');
     $reqRef->setValue($ctrl, new \Hyperf\HttpServer\Request());
 
     $res = $ctrl->getConfig();

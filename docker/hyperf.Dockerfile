@@ -31,7 +31,7 @@ RUN chmod +x /usr/local/bin/install-php-extensions \
 
 # 编译 Swoole（固定版本，保证构建可复现且满足 Hyperf 3.2 + PHP 8.5 所需的 6.2+）
 # libjemalloc2：替换 glibc malloc 作为分配器。glibc 的 free 只在堆顶可连续收缩
-# 时才 munmap 归还（brk 语义），常驻进程（尤其 ai-queue-consumer 长连接大分配）
+# 时才 munmap 归还（brk 语义），常驻进程（尤其事件消费者长连接大分配）
 # 峰值后 RSS 永不回落；jemalloc 按 dirty/muzzy decay 主动 purge 归还页面。
 ARG SWOOLE_VERSION=6.2.0
 RUN apt-get update && apt-get install -y --no-install-recommends \

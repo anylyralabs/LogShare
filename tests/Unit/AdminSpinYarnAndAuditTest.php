@@ -79,7 +79,7 @@ test('SpinYarnManager testDeobfuscate gracefully falls back when extension unava
 test('AuditLogManager records and retrieves logs with filters and pagination', function () {
     AuditLogManager::record('log.delete', 's123456', ['reason' => 'user request'], true, 'admin', '192.168.1.10');
     AuditLogManager::record('security.ban', '1.2.3.4', ['duration' => 3600], true, 'admin', '192.168.1.10');
-    AuditLogManager::record('config.update', 'ai.enabled', ['old' => false, 'new' => true], true, 'admin', '192.168.1.10');
+    AuditLogManager::record('config.update', 'storage.storageTime', ['old' => 604800, 'new' => 864000], true, 'admin', '192.168.1.10');
 
     $all = AuditLogManager::getLogs(1, 20);
     expect($all['total'])->toBeGreaterThanOrEqual(3);

@@ -65,9 +65,6 @@ $endpoints = [
     ['GET', '/v1/admin/analytics/sources', [], null, 'Admin 客户端来源分布'],
     ['GET', '/v1/admin/analytics/versions', [], null, 'Admin 版本与加载器矩阵'],
     ['GET', '/v1/admin/analytics/trends?hours=24', [], null, 'Admin 趋势指标分析'],
-    ['GET', '/v1/admin/system/queue', [], null, 'Admin AI 队列指标'],
-    ['GET', '/v1/admin/ai/metrics', [], null, 'Admin AI 性能吞吐与耗时'],
-    ['GET', '/v1/admin/ai/queue/inspect', [], null, 'Admin AI 队列深度审计'],
 
     // 3. Admin 统一事件队列与死信
     ['GET', '/v1/admin/event-queue/stats', [], null, 'Admin 事件队列概况指标'],
@@ -82,7 +79,6 @@ $endpoints = [
     ['GET', '/v1/admin/config', [], null, 'Admin 配置读取 (脱敏)'],
 
     // 6. 已知领域知识接口
-    ['GET', '/v1/admin/ai/domain-knowledge', [], null, 'Admin 领域知识列表获取'],
 ];
 
 echo "\n=== 开始执行线上 API 全量探查 ===\n\n";
@@ -126,59 +122,24 @@ foreach ($endpoints as [$method, $path, $headers, $body, $desc]) {
     }
 }
 
-// 8. 测试领域知识的 POST / PUT / DELETE 生命周期
-echo "\n=== 8. 领域知识 CRUD 专项实测 ===\n";
-// 测试 A: 模拟前端带 Content-Type: application/json 发送创建
-$postPayload = json_encode(['content' => '测试条目：PojavLauncher 遇到 SIGSEGV 时优先切换 gl4es 渲染器', 'enabled' => true]);
-$createRes = request('POST', '/v1/admin/ai/domain-knowledge', ['Content-Type' => 'application/json'], $postPayload);
-printf("POST /v1/admin/ai/domain-knowledge (with Content-Type) -> %d | body: %s\n", $createRes['status'], substr($createRes['body'], 0, 120));
-
-// 测试 B: 模拟前端未带 Content-Type 发送创建（复现用户反映的问题！）
-$createNoCtRes = request('POST', '/v1/admin/ai/domain-knowledge', [], $postPayload);
-printf("POST /v1/admin/ai/domain-knowledge (NO Content-Type) -> %d | body: %s\n", $createNoCtRes['status'], substr($createNoCtRes['body'], 0, 120));
-
-$createdId = null;
-$createdData = json_decode($createRes['body'], true);
-if (isset($createdData['data']['id'])) {
-    $createdId = $createdData['data']['id'];
-    echo "创建条目 ID: {$createdId}\n";
-
-    // 测试 PUT 更新
-    $putPayload = json_encode(['content' => '更新条目：PojavLauncher 在 Android 14+ 必须使用 gl4es 渲染器', 'enabled' => true]);
-    $putRes = request('PUT', "/v1/admin/ai/domain-knowledge/{$createdId}", ['Content-Type' => 'application/json'], $putPayload);
-    printf("PUT /v1/admin/ai/domain-knowledge/{$createdId} -> %d | body: %s\n", $putRes['status'], substr($putRes['body'], 0, 120));
-
-    // 测试 DELETE 删除
-    $delRes = request('DELETE', "/v1/admin/ai/domain-knowledge/{$createdId}");
-    printf("DELETE /v1/admin/ai/domain-knowledge/{$createdId} -> %d | body: %s\n", $delRes['status'], substr($delRes['body'], 0, 120));
-}
-
-// 9. 测试配置更新 PUT /v1/admin/config
-echo "\n=== 9. 配置修改实测 (LogAgent 工具调用轮次修改) ===\n";
+// 8. 测试配置更新 PUT /v1/admin/config
+echo "\n=== 8. 配置修改实测 ===\n";
 $cfgRes = request('GET', '/v1/admin/config');
 $cfgData = json_decode($cfgRes['body'], true);
-$currentAi = $cfgData['data']['ai'] ?? [];
-$currentRounds = $currentAi['agent']['maxToolRounds'] ?? 10;
-echo "当前 agent.maxToolRounds: " . json_encode($currentRounds) . "\n";
+$currentStorageTime = $cfgData['data']['storage']['storageTime'] ?? 604800;
+echo "当前 storage.storageTime: " . json_encode($currentStorageTime) . "\n";
 
-// 尝试更新 maxToolRounds 为 25
 $updatePayload = json_encode([
-    'ai' => [
-        'agent' => [
-            'enabled' => true,
-            'maxToolRounds' => 25,
-            'maxFileLines' => 60000,
-            'maxFileBytes' => 10485760,
-        ]
-    ]
+    'storage' => [
+        'storageTime' => 604800,
+    ],
 ]);
 $updateRes = request('PUT', '/v1/admin/config', ['Content-Type' => 'application/json'], $updatePayload);
 printf("PUT /v1/admin/config (with Content-Type) -> %d | body: %s\n", $updateRes['status'], substr($updateRes['body'], 0, 120));
 
-// 再次读取检查
 $cfgCheckRes = request('GET', '/v1/admin/config');
 $cfgCheckData = json_decode($cfgCheckRes['body'], true);
-$updatedRounds = $cfgCheckData['data']['ai']['agent']['maxToolRounds'] ?? null;
-echo "更新后 agent.maxToolRounds: " . json_encode($updatedRounds) . "\n";
+$updatedStorageTime = $cfgCheckData['data']['storage']['storageTime'] ?? null;
+echo "更新后 storage.storageTime: " . json_encode($updatedStorageTime) . "\n";
 
 echo "\n=== 探查完成: 通过 {$passedCount} 项，失败 {$failedCount} 项 ===\n";

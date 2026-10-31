@@ -63,7 +63,7 @@ test('TelemetryService records API metrics and computes stats', function () {
         ],
         [
             'type' => 'api',
-            'endpoint' => '/v1/ai/analyse',
+            'endpoint' => '/v1/analyse',
             'method' => 'POST',
             'duration' => 620.0, // slow query
             'status' => 500,
@@ -108,7 +108,7 @@ test('TelemetryService records API metrics and computes stats', function () {
     // Endpoints ranking assertions
     $endpoints = $stats['endpoints'];
     expect($endpoints)->not->toBeEmpty();
-    // /v1/log had 2 requests, /v1/ai/analyse had 1
+    // /v1/log had 2 requests, /v1/analyse had 1
     expect($endpoints[0]['endpoint'])->toBe('/v1/log');
     expect($endpoints[0]['count'])->toBe(2);
     expect($endpoints[0]['avg_duration'])->toBe(50.5);
@@ -125,7 +125,7 @@ test('TelemetryService records API metrics and computes stats', function () {
 
     // Recent slow queries
     expect($stats['recent_slow'])->not->toBeEmpty();
-    expect($stats['recent_slow'][0]['endpoint'])->toBe('/v1/ai/analyse');
+    expect($stats['recent_slow'][0]['endpoint'])->toBe('/v1/analyse');
     expect($stats['recent_slow'][0]['duration'])->toEqual(620.0);
 
     // Recent errors

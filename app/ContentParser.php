@@ -166,7 +166,7 @@ class ContentParser
             }
         }
 
-        // Parse optional log id (used by AI analyse to bind session file access)
+        // Parse optional log id (kept for request compatibility)
         if (isset($data['id']) && is_string($data['id'])) {
             $result['id'] = substr($data['id'], 0, 64);
         }

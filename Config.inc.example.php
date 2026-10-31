@@ -79,8 +79,6 @@ return [
         'routes' => [
             '/v1/log' => ['limit' => 30, 'window' => 60],
             '/1/log' => ['limit' => 30, 'window' => 60],
-            '/v1/ai' => ['limit' => 10, 'window' => 60],
-            '/1/ai' => ['limit' => 10, 'window' => 60],
         ],
     ],
 
@@ -111,54 +109,6 @@ return [
         'path' => '/storage/logs/',
     ],
 
-    /* ─── AI ───────────────────────────────────────────────── */
-    'ai' => [
-        // 完全禁用 AI 分析（/v1/ai/* 返回 404）。设为 false 时无需配置 apiKeys。
-        'enabled' => false,
-        'apiKeys' => [
-            // Configure AI_API_KEYS in .env to enable AI.
-        ],
-        'baseUrl' => '',
-        'model' => '',
-        'timeout' => 180,
-        // 自定义 HTTP 请求头（键值对，例如 ['HTTP-Referer' => 'https://logshare.cn', 'X-Title' => 'LogShare']）
-        'headers' => [
-            // 'HTTP-Referer' => 'https://logshare.cn',
-            // 'X-Title' => 'LogShare',
-        ],
-        'agent' => [
-            'enabled' => false,
-            'maxToolRounds' => 3,
-            'maxFileLines' => 50_000,
-            'maxFileBytes' => 512 * 1024,
-        ],
-        // AI 分析微队列（Redis Streams 消费者组）：enabled 后全量分析经
-        // ai:analyse:queue 入队、由 ai-queue-consumer 进程以 maxConcurrent 个
-        // 协程执行，请求侧只做 SSE 中继（首帧推送 queued 状态与排队位置）。
-        // maxQueue 为队列深度上限（XLEN），超限直接 429 + Retry-After。
-        // waitTimeout 为中继端最长等待秒数，0 或负数 = 无排队超时（等到
-        // done/error 或客户端断开为止）。claimIdleMs 之后 pending 条目被
-        // XAUTOCLAIM 重投（消费者崩溃恢复，应大于单任务最长执行时间）。
-        // jobTtl 为任务 payload/事件流存活秒数（无排队超时时即任务总寿命）。
-        // failOpen=true 时 Redis 故障回退请求内 inline 执行（Redis 为可选依赖）。
-        // 依赖 ext-redis 与 cache.redis 可用；关闭时行为与旧版逐字节一致。
-        'queue' => [
-            'enabled' => false,
-            'maxConcurrent' => 2,
-            'maxQueue' => 50,
-            'waitTimeout' => 300,
-            'claimIdleMs' => 120000,
-            'jobTtl' => 600,
-            'failOpen' => true,
-        ],
-        'mcp' => [
-            'webSearch' => [
-                'url' => 'https://mcp.exa.ai/mcp',
-                'headers' => [],
-            ],
-        ],
-    ],
-
     /* ─── SpinYarn（反混淆 PHP 扩展）────────────────────── */
     'spinyarn' => [
         // Yarn/Vanilla 映射目录，相对项目根 ./mappings。
@@ -176,70 +126,6 @@ return [
         'cache_max_entries' => 10,
         'cache_high_watermark' => 10,
         'cache_low_watermark' => 7,
-    ],
-
-    /* ─── GitHub 启动器/渲染器排障工具配置 ─────────────────── */
-    'github' => [
-        // 是否启用 Agent Loop 中的 GitHub 排障检索工具（github_list_repos, github_search, github_get_content）
-        // 开启后模型可自动在线检索开源启动器与渲染器的 Issues、PRs 与 Discussions
-        'enabled' => false,
-
-        // GitHub Personal Access Token (PAT) 列表，支持多 Token 轮询与故障转移
-        // 环境变量 GITHUB_TOKENS 或 GITHUB_TOKEN 可用逗号分隔覆盖此项
-        // 未配置 Token 时走未认证模式（严格受限于 IP 速率，且无法检索 Discussions）
-        'tokens' => [],
-
-        // 可选 HTTP/SOCKS5 代理地址（例如 'http://127.0.0.1:7890'）
-        'proxy' => '',
-
-        // 请求超时时间（秒）
-        'timeout' => 8,
-
-        // Redis 缓存时长（秒，默认 3600）
-        'cache_ttl' => 3600,
-
-        // 单词检索最大返回结果条数（默认 5，最大 10）
-        'max_results' => 5,
-
-        // 官方推荐排障仓库映射清单（供 github_list_repos 查询与别名解析）
-        'repos' => [
-            'fcl' => [
-                'name' => 'FoldCraftLauncher',
-                'repo' => 'FCL-Team/FoldCraftLauncher',
-                'aliases' => ['fcl', 'foldcraft'],
-                'desc' => 'Android 平台移动端启动器，涵盖 Java 运行时安装、触控布局、模组配置等问题',
-            ],
-            'pojav' => [
-                'name' => 'PojavLauncher',
-                'repo' => 'PojavLauncherTeam/PojavLauncher',
-                'aliases' => ['pojav', 'pojavlauncher'],
-                'desc' => '全球主流移动端启动器，包含 libglfw、OpenAL、Java 堆栈与安卓各版本兼容问题',
-            ],
-            'amethyst' => [
-                'name' => 'Amethyst-Launcher',
-                'repo' => 'Amethyst-Launcher/Amethyst',
-                'aliases' => ['amc', 'amethyst'],
-                'desc' => 'PojavLauncher 官方续作，针对新 Android 版本权限、运行时与环境适配',
-            ],
-            'pgw' => [
-                'name' => 'PojavLauncher-Glow-Worm',
-                'repo' => 'Glow-Worm-Project/PojavLauncher-Glow-Worm',
-                'aliases' => ['pgw', 'glowworm'],
-                'desc' => '移动端 Pojav 增强分支，主打扩展渲染器支持与运行优化',
-            ],
-            'mobileglues' => [
-                'name' => 'MobileGlues',
-                'repo' => 'sparrow-app/MobileGlues',
-                'aliases' => ['mg', 'mobileglues'],
-                'desc' => '移动端渲染桥接组件，专门处理图形崩溃、着色器报错与光影兼容性问题',
-            ],
-            'hmcl' => [
-                'name' => 'Hello Minecraft! Launcher',
-                'repo' => 'HMCL-dev/HMCL',
-                'aliases' => ['hmcl'],
-                'desc' => '主流跨平台桌面启动器，涵盖 Fabric/Forge 安装器故障、Java 下载与账号授权',
-            ],
-        ],
     ],
 
     /* ─── 管理后台接口（Admin API）────────────────────────── */

@@ -3,8 +3,7 @@
 namespace App;
 
 /**
- * 应用版本号（单一来源）。RagController / MCPClient 等需要对外暴露版本号
- * 的位置统一引用，避免多处硬编码漂移。
+ * 应用版本号（单一来源）。对外暴露版本号的位置统一引用，避免多处硬编码漂移。
  */
 final class Version
 {

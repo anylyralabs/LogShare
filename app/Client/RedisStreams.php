@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Client;
 
 /**
- * Redis Streams 命令面封装（AI 分析微队列专用）。
+ * Redis Streams 命令面封装（统一事件队列使用）。
  *
  * 复用 RedisClient 的协程级连接隔离；与 RedisCache 不同，本类的键形态是
  * Stream 而非普通缓存，不实现 CacheInterface（架构测试约束 app/Cache 下
