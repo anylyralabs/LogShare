@@ -9,10 +9,9 @@ declare(strict_types=1);
  *   php scripts/ci_e2e_test.php --base-url=http://127.0.0.1:9501 [--admin-token=xxx] [--waf-test]
  */
 
-$options = getopt('', ['base-url:', 'admin-token::', 'waf-test::', 'rag-token::']);
+$options = getopt('', ['base-url:', 'admin-token::', 'waf-test::']);
 $baseUrl = rtrim((string) ($options['base-url'] ?? 'http://127.0.0.1:9501'), '/');
 $adminToken = (string) ($options['admin-token'] ?? 'test-admin-secret-token');
-$ragToken = (string) ($options['rag-token'] ?? ($options['admin-token'] ?? ''));
 $testWaf = isset($options['waf-test']);
 
 echo "=== 开始 LogShare 真实环境端到端测试 ===\n";
@@ -281,71 +280,7 @@ runCheck('DELETE /v1/log/{id} 鉴权拦截与有效 Token 成功删除', functio
     }
 });
 
-// ── 3. RAG MCP Streamable HTTP 协议验证 ──
-
-$ragHeaders = ['Content-Type' => 'application/json'];
-if ($ragToken !== '') {
-    $ragHeaders['Authorization'] = "Bearer {$ragToken}";
-}
-
-runCheck('POST /rag MCP JSON-RPC 2.0 initialize 协议握手', function () use ($baseUrl, $ragHeaders) {
-    $payload = json_encode([
-        'jsonrpc' => '2.0',
-        'id' => 1,
-        'method' => 'initialize',
-        'params' => [
-            'protocolVersion' => '2024-11-05',
-            'clientInfo' => ['name' => 'e2e-test', 'version' => '1.0'],
-        ],
-    ]);
-    $res = httpRequest('POST', "{$baseUrl}/rag", $ragHeaders, $payload);
-    if ($res['status'] !== 200) {
-        throw new RuntimeException("MCP initialize 失败: {$res['status']}");
-    }
-    $json = json_decode($res['body'], true);
-    if (!isset($json['result']['serverInfo']['name']) || $json['result']['serverInfo']['name'] !== 'logshare-rag') {
-        throw new RuntimeException("MCP initialize 结果不合法: {$res['body']}");
-    }
-});
-
-runCheck('POST /rag MCP tools/list 与 list_topics / rag_search 声明', function () use ($baseUrl, $ragHeaders) {
-    $payload = json_encode([
-        'jsonrpc' => '2.0',
-        'id' => 2,
-        'method' => 'tools/list',
-    ]);
-    $res = httpRequest('POST', "{$baseUrl}/rag", $ragHeaders, $payload);
-    if ($res['status'] !== 200) {
-        throw new RuntimeException("MCP tools/list 失败: {$res['status']}");
-    }
-    $json = json_decode($res['body'], true);
-    $tools = array_column($json['result']['tools'] ?? [], 'name');
-    if (!in_array('rag_search', $tools, true) || !in_array('list_topics', $tools, true)) {
-        throw new RuntimeException("MCP 工具集不完整: " . implode(', ', $tools));
-    }
-});
-
-runCheck('POST /rag MCP tools/call (list_topics)', function () use ($baseUrl, $ragHeaders) {
-    $payload = json_encode([
-        'jsonrpc' => '2.0',
-        'id' => 3,
-        'method' => 'tools/call',
-        'params' => [
-            'name' => 'list_topics',
-            'arguments' => new stdClass(),
-        ],
-    ]);
-    $res = httpRequest('POST', "{$baseUrl}/rag", $ragHeaders, $payload);
-    if ($res['status'] !== 200) {
-        throw new RuntimeException("MCP 调用 list_topics 失败: {$res['status']}");
-    }
-    $json = json_decode($res['body'], true);
-    if (!isset($json['result']['content'][0]['text'])) {
-        throw new RuntimeException("list_topics 返回内容不合法: {$res['body']}");
-    }
-});
-
-// ── 4. Admin 管理接口验证 ──
+// ── 3. Admin 管理接口验证 ──
 
 runCheck('GET /v1/admin/logs 需授权拦截与授权访问', function () use ($baseUrl, $adminToken) {
     // 1. 无授权拦截
@@ -391,7 +326,7 @@ runCheck('GET /v1/admin/system/stats 与 storage-health 系统状态检查', fun
     }
 });
 
-// ── 5. WAF 与边缘安全网关测试（若开启 --waf-test） ──
+// ── 4. WAF 与边缘安全网关测试（若开启 --waf-test） ──
 
 if ($testWaf) {
     runCheck('WAF 统计端点 GET /security/stats 正常响应', function () use ($baseUrl) {

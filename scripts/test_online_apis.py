@@ -60,9 +60,6 @@ endpoints = [
     ("GET", "/v1/admin/audit/logs?limit=10", None, None, "Admin 操作审计日志"),
     ("GET", "/v1/admin/telemetry/stats", None, None, "Admin 遥测统计聚合"),
     ("GET", "/v1/admin/system/logs?limit=10", None, None, "Admin 系统诊断日志"),
-    ("GET", "/v1/admin/rag/stats", None, None, "Admin RAG 统计信息"),
-    ("GET", "/v1/admin/rag/topics", None, None, "Admin RAG 主题列表"),
-    ("GET", "/v1/admin/rag/docs", None, None, "Admin RAG 文档检索"),
     ("GET", "/v1/admin/config", None, None, "Admin 配置读取 (脱敏)"),
     ("GET", "/v1/admin/ai/domain-knowledge", None, None, "Admin 领域知识列表获取"),
 ]

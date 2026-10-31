@@ -38,8 +38,8 @@ afterEach(function () {
 
 test('AiMetricsService records analysis and computes summary statistics', function () {
     // 模拟记录 3 次成功，1 次失败
-    AiMetricsService::recordAnalysis(true, 1200, 3500, 1050, ['rag_search'], ['forge', 'paper']);
-    AiMetricsService::recordAnalysis(true, 2500, 4200, 1400, ['rag_search'], ['forge']);
+    AiMetricsService::recordAnalysis(true, 1200, 3500, 1050, ['web_search_exa'], ['forge', 'paper']);
+    AiMetricsService::recordAnalysis(true, 2500, 4200, 1400, ['web_search_exa'], ['forge']);
     AiMetricsService::recordAnalysis(true, 800, 2100, 700, [], []);
     AiMetricsService::recordAnalysis(false, 300, 1000, 0, [], []);
 
@@ -54,7 +54,7 @@ test('AiMetricsService records analysis and computes summary statistics', functi
     expect($summary['avgDurationMs'])->toBe(1200); // (1200+2500+800+300)/4 = 1200
     expect($summary['p50DurationMs'])->toBeGreaterThan(0);
     expect($summary['estTotalTokens'])->toBeGreaterThan(0);
-    expect($summary['ragCalls'])->toBe(2);
+    expect($summary['ragCalls'])->toBe(0);
 
     // 检查 Topic 排行
     $topics = $metrics['topics'];

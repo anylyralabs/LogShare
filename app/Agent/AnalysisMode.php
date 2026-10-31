@@ -9,7 +9,7 @@ namespace App\Agent;
  *
  * - quick：仅非工具直答，1 轮，不检索；
  * - deep：全部工具，最多 50 轮，web≤5、总检索≤6；
- * - launcher：GitHub + RAG 优先，20 轮，web≤3、github≤5、总检索≤6。
+ * - launcher：GitHub 优先，20 轮，web≤3、github≤5、总检索≤6。
  */
 final class AnalysisMode
 {
@@ -89,7 +89,7 @@ final class AnalysisMode
             [
                 'mode' => self::LAUNCHER,
                 'name' => '启动器优先模式',
-                'description' => '面向 Pojav/FCL/HMCL 等启动器及渲染器崩溃，优先检索 GitHub 与内置 RAG，上限 20 轮。',
+                'description' => '面向 Pojav/FCL/HMCL 等启动器及渲染器崩溃，优先检索 GitHub，上限 20 轮。',
                 'active' => $currentMode === self::LAUNCHER,
                 'defaultLimits' => self::defaultLimits(self::LAUNCHER),
                 'limits' => self::limits(self::LAUNCHER),

@@ -33,10 +33,8 @@ final class ToolSession
     public array $readFiles = [];
 
     /**
-     * 检索预算计数器（会话级，与提示词「检索策略」的数字口径一致）：
-     * rag_search 与 web_search_exa 分列计数，list_topics 等发现性调用不计数。
+     * 检索预算计数器（会话级，与提示词「检索策略」的数字口径一致）。
      */
-    public int $ragSearchCalls = 0;
     public int $webSearchCalls = 0;
     public int $githubSearchCalls = 0;
     public int $githubDetailCalls = 0;

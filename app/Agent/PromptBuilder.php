@@ -43,8 +43,8 @@ final class PromptBuilder
                 'type' => 'function',
                 'function' => [
                     'name' => 'web_search_exa',
-                    'description' => '搜索互联网，查找知识库未覆盖的公开问题：新版本 mod/服务端兼容性、小众报错、官方公告等。'
-                        . '知识库检索无果后再使用；查询词与 rag_search 相同，使用错误类名或报错关键词原文。',
+                    'description' => '搜索互联网，查找新版本 mod/服务端兼容性、小众报错、官方公告等公开问题。'
+                        . '查询词使用错误类名或报错关键词原文。',
                     'parameters' => [
                         'type' => 'object',
                         'properties' => [
@@ -54,44 +54,6 @@ final class PromptBuilder
                     ],
                 ],
             ];
-        }
-
-        if (!empty($mcp['rag']['url']) && $mode !== AnalysisMode::QUICK) {
-            if (ToolManager::isToolEnabled('rag_search', $config)) {
-                $tools[] = [
-                    'type' => 'function',
-                    'function' => [
-                        'name' => 'rag_search',
-                        'description' => '在内置知识库中检索已验证的实战资料。知识库覆盖：常见崩溃与故障模式（mixin 注入失败、内存不足、Java 版本错误等）、'
-                            . '移动端启动器生态实战案例蒸馏（FCL/Zalith/Amethyst/PGW/MobileGlues，含排障决策树）、三大日志文件格式解读、'
-                            . 'Fabric/Forge/NeoForge 与 PaperMC/Purpur/Geyser 等开发文档。日志中出现异常类名、崩溃特征或启动器相关问题时优先使用；'
-                            . '纯常识问题不必使用。返回带来源路径的文档片段，多数条目按「签名-含义-解决方案」组织。',
-                        'parameters' => [
-                            'type' => 'object',
-                            'properties' => [
-                                'query' => ['type' => 'string', 'description' => '检索词。直接使用日志中的原文信号：英文异常类名或错误串（如 MixinApplyError、SIGSEGV、OutOfMemoryError），或中文症状关键词（如 内存不足、启动闪退）。不要翻译或改写异常类名。'],
-                                'topic' => ['type' => 'string', 'description' => '可选。限定在某个主题目录内检索（目录名来自 list_topics 的主题地图），如 "patterns"、"日志分析"。省略则全库检索。'],
-                                'k' => ['type' => 'number', 'description' => '返回片段数量，默认 5'],
-                            ],
-                            'required' => ['query'],
-                        ],
-                    ],
-                ];
-            }
-            if (ToolManager::isToolEnabled('list_topics', $config)) {
-                $tools[] = [
-                    'type' => 'function',
-                    'function' => [
-                        'name' => 'list_topics',
-                        'description' => '列出内置知识库的主题地图（目录、说明与内容样本）。不确定检索方向、或 rag_search 连续无结果时调用；'
-                            . '看完地图后应带着明确目标词去 rag_search（可配合 topic 参数定向），不要看完地图就停止分析。',
-                        'parameters' => [
-                            'type' => 'object',
-                            'properties' => new \stdClass(),
-                        ],
-                    ],
-                ];
-            }
         }
 
         $githubConfig = $config['github'] ?? \App\Config::Get('github');
@@ -240,12 +202,11 @@ final class PromptBuilder
         return $tools;
     }
 
-    /** 组装初始消息（system + user）。deep 模式与旧 LogAgent::buildMessages 逐字一致；$topicsText 注入知识库主题地图（可为空串）。 */
+    /** 组装初始消息（system + user）。deep 模式与旧 LogAgent::buildMessages 逐字一致。 */
     public function buildMessages(
         string $content,
         ?string $logId,
         array $config,
-        string $topicsText = '',
         string $mode = AnalysisMode::DEEP
     ): array {
         $system = $config['systemPrompt'] ?? $this->defaultSystemPrompt($logId);
@@ -267,31 +228,27 @@ final class PromptBuilder
 
         $system .= "\n\n检索与探查策略（深度因果驱动与合理工具调用）：\n"
             . "- 深入探查与线索原则：复杂日志绝非仅看表象错误。除非报错原因极其明确孤立无需上下文，否则必须至少进行一次日志上下文线索查找（如 read_log_file 读取报错发生前后上下文区间、读取相关 crash-reports 附件、或 grep_log_file 检索前置异常与模组加载信息）；切忌仅凭初始截取的单点错误切片草率下结论。\n"
-            . "- 报错检索策略（大分类无实际检索价值，直搜 Java Error 报错摘要）：知识库的大分类层级对实际检索没有太大作用，切勿纠结分类或强行匹配目录。日志报错时直接提取日志里的 Java Error 直接报错摘要（如 Caused by 后的异常类名、报错消息文本、关键错误特征等）作为 query 进行检索；常见报错参考 patterns 与 日志分析，手机启动器常识与版本列表参考 mobile_launcher，不确定或未包含时直接全库检索，不要硬套目录。\n"
+            . "- 报错检索策略：日志报错时直接提取日志里的 Java Error 报错摘要（如 Caused by 后的异常类名、报错消息文本、关键错误特征等）作为 web_search_exa 的 query。\n"
             . "- 启动器与渲染器问题（动态实时排障）：当日志中出现启动器名称（如 FoldCraftLauncher、PojavLauncher、Amethyst-Launcher、PojavLauncher-Glow-Worm 等）或渲染器（MobileGlues、gl4es 等）报错时，优先调用 `github_list_repos` 确认官方全名与仓库，使用 `github_search` 在 GitHub 官方仓库的 Issues、PRs（很多疑难崩溃与修复记录在 PR 解决说明中）及 Discussions 中检索最新线索，并调用 `github_get_content` 获取最吻合条目的解决方案。\n"
-            . "- 检索词提取规则：直接从日志中摘取 Java Error 原文报错摘要（如 Caused by: 后的异常全名或类名，如 NullPointerException、MixinApplyError 等），英文异常类名/错误串原样保留，中文症状直接用中文，可配合 topic 参数或直接全库检索。\n"
+            . "- 检索词提取规则：直接从日志中摘取 Java Error 原文报错摘要（如 Caused by: 后的异常全名或类名，如 NullPointerException、MixinApplyError 等），英文异常类名/错误串原样保留，中文症状直接用中文。\n"
             . "- 检索结果必须与日志中的异常真正对应才可采用；无关结果不进入分析。\n"
-            . "- 无结果时换词重试最多一次，按以下方向改写（选一，不要叠加）：① 长类名去包路径取简短类名（org.spongepowered...MixinApplyError → MixinApplyError）；② 英文异常类名与中文症状词互译（OutOfMemoryError → 内存不足）；③ 叠加限定词（模组名/启动器全名）；④ 改用其他目录或放大全库。仍无结果说明未覆盖，改用 web_search_exa。\n"
-            . "- 预算按信息缺口计数：每个独立待核实的信号或问题，检索类调用不超过 2 次；全对话 rag_search 与 web_search_exa 合计约 6 次时代码会注入收敛提示，github_search 与 github_get_content 严格各限 2 次，超额直接拦截。此后应立即基于已有证据输出并标注未核实项。web_search_exa 全对话最多 5 次。\n"
-            . "- 引用来源：知识库结论标注条目来源路径；GitHub 结论注明具体仓库、条目类型与编号（如 FoldCraftLauncher PR #852）；网络结论标注 URL。\n"
-            . "- 知识库/社区结论与日志证据矛盾时，以日志为准；结论中注明哪些方面未能核实，不要臆测。\n"
+            . "- 无结果时换词重试最多一次，按以下方向改写（选一，不要叠加）：① 长类名去包路径取简短类名（org.spongepowered...MixinApplyError → MixinApplyError）；② 英文异常类名与中文症状词互译（OutOfMemoryError → 内存不足）；③ 叠加限定词（模组名/启动器全名）；④ 改用更短的关键词。\n"
+            . "- 预算按信息缺口计数：每个独立待核实的信号或问题，web_search_exa 调用不超过 2 次、全对话最多 5 次；github_search 与 github_get_content 严格各限 2 次，超额直接拦截。此后应立即基于已有证据输出并标注未核实项。\n"
+            . "- 引用来源：GitHub 结论注明具体仓库、条目类型与编号（如 FoldCraftLauncher PR #852）；网络结论标注 URL。\n"
+            . "- 社区结论与日志证据矛盾时，以日志为准；结论中注明哪些方面未能核实，不要臆测。\n"
             . "- 附件中存在 crash-reports 类文件时，优先用 read_log_file 读取它：崩溃报告含完整堆栈、系统状态与 mod 列表，信息密度高于 latest.log 尾部；主日志仅用于补充崩溃报告未覆盖的时间线。\n"
             . "- 大日志与多附件定位：排查特定异常类名、报错文本、mod ID 或配置行时，优先使用 grep_log_file 检索行号与上下文，避免通读无用段落；确认具体行号后再使用 read_log_file(filename, line_start, line_end) 定向扩展。\n"
             . "- 适可而止的边界：已探明上下文且掌握充分因果证据时应及时收敛给出清晰结论；或长日志初始未匹配显式错误且按常用词探测 1~2 次确实无异常后客观告知用户未发现明显错误，避免无目的循环试错；但绝不能在尚未探查上下文前就过早放弃调用工具。\n"
             . "- read_log_file 返回的主日志和附加日志均已经过与上传主日志相同的脱敏过滤；不得声称附加日志未脱敏，也不得要求用户重新提供其中的敏感信息。\n\n"
             . "示例（正确的检索路径）：\n"
             . "1. 日志片段「Caused by: org.spongepowered.asm.mixin.transformer.MixinApplyError: ...」\n"
-            . "   → 提取 Java Error 报错摘要 \"MixinApplyError\" → 调用 rag_search(query: \"MixinApplyError\") → 命中 patterns/mixin-apply-failed.md，条目含签名与修复步骤，直接给出结论。\n"
+            . "   → 提取 Java Error 报错摘要 \"MixinApplyError\" → 调用 web_search_exa(query: \"MixinApplyError\") → 结合官方文档或社区结论给出处理步骤。\n"
             . "2. 日志出现 FoldCraftLauncher 启动时渲染崩溃并提示 SIGSEGV：\n"
             . "   → 调用 github_search(repo: \"FoldCraftLauncher\", query: \"SIGSEGV\", type: \"all\") → 命中 PR 修复或采纳回答\n"
             . "   → 调用 github_get_content(repo: \"FoldCraftLauncher\", number: ...) 获取具体解决方案并给出建议。\n\n"
             . "结构化输出（供前端分栏展示与质量校验）：正文全部结束后，另起一段在末尾输出且仅输出一个 ```json 代码块，"
             . "字段固定为 {\"rootCause\": \"一句话根因\", \"confidence\": 0 到 1 的小数, \"evidence\": [\"支撑该根因的日志行或检索来源\"], \"steps\": [\"按顺序的解决步骤\"]}；"
             . "confidence 依据证据充分度取值，凡未核实的推断须相应调低并不应臆造 evidence。";
-
-        if ($topicsText !== '') {
-            $system .= "\n\n以下是内部知识库目录概览（大分类无需硬套，仅供参考）：\n" . $topicsText;
-        }
 
         $logWindow = $this->window->buildInitialWindow($content, self::MAX_TOOL_RESULT_BYTES);
 
@@ -340,8 +297,8 @@ final class PromptBuilder
    - 若需在长日志或多个附件中查找特定异常、报错关键字、mod ID 或配置，使用 `grep_log_file` 快速获取匹配行号与上下文。
    - 若需通读文件或特定行区间，调用 `read_log_file`。需要聚焦局部上下文时，由你传入 `line_start` 和 `line_end` 指定行区间（例如错误锚点前 50 行至后 30 行），探查前置诱因。超大内容需要续读时，使用返回的 `next_offset`。
 2. 启动器与渲染器排障：遇启动器报错时，可调用 `github_list_repos` 查看支持仓库官方全名，使用 `github_search` 在 GitHub 官方仓库的 Issues/PRs/Discussions 检索最新排障线索，使用 `github_get_content` 获取解决方案。
-3. 报错与知识库检索：大分类对检索没有太大作用，切勿纠结分类或目录。遇到报错需要检索时，直接提取日志中的 Java Error 直接报错摘要（如 `Caused by:` 后的异常全名、错误类型、具体报错消息等）作为检索关键词；手机启动器与渲染器常识或版本关系查 `mobile_launcher`。
-4. 若知识库检索结果被截断（出现"…"或"已截断"标记），基于被截断处再次检索补全，不需要重复读取文件。
+3. 报错与网络检索：遇到报错需要检索时，直接提取日志中的 Java Error 直接报错摘要（如 `Caused by:` 后的异常全名、错误类型、具体报错消息等）作为 `web_search_exa` 的检索关键词。
+4. 若检索结果被截断（出现"…"或"已截断"标记），基于被截断处再次检索补全，不需要重复读取文件。
 
 重要停止规则：
 - 不要在已经有完整日志内容的情况下再次调用 `read_log_file`，重复调用会被拒绝并浪费预算。

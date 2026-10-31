@@ -20,14 +20,14 @@ FROM php:8.5.0-cli-bookworm
 # Composer（安装项目依赖用）
 COPY --from=composer:2.8.9 /usr/bin/composer /usr/bin/composer
 
-# 扩展安装器：pdo_mysql / pdo_sqlite / redis / zip（zip 供 composer 解压 dist 包）
-# pdo_sqlite 为内置 RAG（SQLite FTS5）必需；pcntl / posix / sockets 为 Hyperf 注解扫描与 Swoole 所需
+# 扩展安装器：pdo_mysql / redis / zip（zip 供 composer 解压 dist 包）
+# pcntl / posix / sockets 为 Hyperf 注解扫描与 Swoole 所需
 # 直接拉取官方 release 脚本——镜像 tag 内部路径曾变动导致 COPY not found，此方式不受上游打包影响。
 # 供应链注意：ADD 已固定 2.7.0 版本 tag，但未 pin 内容校验和；升级版本号时建议
 # 先下载脚本核对其 sha256 后改用 `ADD --checksum=sha256:...`（需 BuildKit）。
 ADD https://github.com/mlocati/docker-php-extension-installer/releases/download/2.7.0/install-php-extensions /usr/local/bin/install-php-extensions
 RUN chmod +x /usr/local/bin/install-php-extensions \
-    && install-php-extensions pdo_mysql pdo_sqlite redis zip pcntl posix sockets mbstring brotli
+    && install-php-extensions pdo_mysql redis zip pcntl posix sockets mbstring brotli
 
 # 编译 Swoole（固定版本，保证构建可复现且满足 Hyperf 3.2 + PHP 8.5 所需的 6.2+）
 # libjemalloc2：替换 glibc malloc 作为分配器。glibc 的 free 只在堆顶可连续收缩
@@ -41,7 +41,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && ln -sf /usr/lib/*-linux-gnu/libjemalloc.so.2 /usr/local/lib/libjemalloc.so.2 \
     && rm -rf /var/lib/apt/lists/*
 
-# jemalloc 生效：全容器进程（php/hyperf/composer/rag:build）统一走 jemalloc；
+# jemalloc 生效：全容器进程（php/hyperf/composer）统一走 jemalloc；
 # decay 1s 加速空闲页归还（默认 10s，对 3.6G 小机器再激进一点，收益是 RSS 紧跟真实用量）
 ENV LD_PRELOAD=/usr/local/lib/libjemalloc.so.2 \
     MALLOC_CONF=dirty_decay_ms:1000,muzzy_decay_ms:1000,background_thread:true
@@ -79,8 +79,8 @@ COPY . .
 # 映射目录：/app/mappings（compose 以 bind mount 挂载宿主机 ./mappings，映射表由
 # 下载脚本 scripts/download_mappings.sh + download_vanilla_mappings.py 预先生成）
 
-# 启动：先清理挂载的陈旧注解容器缓存，再构建 RAG 索引并启动服务。
+# 启动：先清理挂载的陈旧注解容器缓存，再启动服务。
 # `exec` 让 Hyperf 成为 PID 1，保证信号能正确传递。
-CMD ["sh", "-c", "rm -rf /app/runtime/container; php bin/hyperf.php rag:build || echo '[entrypoint] rag:build failed, starting server with existing index'; exec php bin/hyperf.php start"]
+CMD ["sh", "-c", "rm -rf /app/runtime/container; exec php bin/hyperf.php start"]
 
 # 版本断言：spinyarn 扩展版本须与阶段 1 的 SPINYARN_REF 对应（`php --ri spinyarn` 核验由 CI 保障，本任务不改 CI）。

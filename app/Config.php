@@ -72,8 +72,6 @@ class Config
      *  - AI_BASE_URL        → ai.baseUrl
      *  - AI_MODEL           → ai.model
      *  - AI_ENABLED         → ai.enabled (1/true/on/yes = true)
-     *  - AI_RAG_ENABLED     → ai.rag.enabled (semantic RAG switch)
-     *  - AI_RAG_PROVIDERS   → ai.rag.providers (JSON array)
      *
      * @param array $data Config array by reference
      * @return void
@@ -95,16 +93,6 @@ class Config
         if (($password = getenv('REDIS_PASSWORD')) !== false && $password !== '') {
             $data['cache']['redis']['password'] = $password;
         }
-        if (($enabled = getenv('AI_RAG_ENABLED')) !== false) {
-            $data['ai']['rag']['enabled'] = in_array(strtolower($enabled), ['1', 'true', 'on', 'yes'], true);
-        }
-        if (($providers = getenv('AI_RAG_PROVIDERS')) !== false && $providers !== '') {
-            $decoded = json_decode($providers, true);
-            if (is_array($decoded)) {
-                $data['ai']['rag']['providers'] = $decoded;
-            }
-        }
-
         if ($keys = getenv('AI_API_KEYS')) {
             $data['ai']['apiKeys'] = array_values(array_filter(array_map('trim', explode(',', $keys)), fn($k) => $k !== ''));
         }
@@ -132,12 +120,6 @@ class Config
         }
         if ($adminToken = getenv('ADMIN_TOKEN')) {
             $data['admin']['token'] = $adminToken;
-        }
-
-        if ($ragAuthToken = getenv('AI_MCP_RAG_AUTH_TOKEN')) {
-            $data['ai']['mcp']['rag']['authToken'] = $ragAuthToken;
-        } elseif ($ragAuthToken = getenv('MCP_RAG_AUTH_TOKEN')) {
-            $data['ai']['mcp']['rag']['authToken'] = $ragAuthToken;
         }
 
         // GitHub 排障工具配置覆盖
@@ -190,18 +172,6 @@ class Config
             }
             if (!filter_var($ai['baseUrl'] ?? '', FILTER_VALIDATE_URL) || ($ai['model'] ?? '') === '') {
                 throw new \InvalidArgumentException('AI_BASE_URL and AI_MODEL are required when AI is enabled');
-            }
-        }
-
-        if (($ai['rag']['enabled'] ?? false) === true) {
-            $providers = $ai['rag']['providers'] ?? [];
-            if (!is_array($providers) || $providers === []) {
-                throw new \InvalidArgumentException('AI_RAG_PROVIDERS is required when semantic RAG is enabled');
-            }
-            foreach ($providers as $provider) {
-                if (!is_array($provider) || ($provider['name'] ?? '') === '' || !filter_var($provider['baseUrl'] ?? '', FILTER_VALIDATE_URL) || ($provider['apiKey'] ?? '') === '' || ($provider['embeddingModel'] ?? '') === '') {
-                    throw new \InvalidArgumentException('Each AI_RAG_PROVIDERS entry requires name, baseUrl, apiKey and embeddingModel');
-                }
             }
         }
 
@@ -428,40 +398,11 @@ class Config
             $updates['ai']['apiKeys'] = $restoredKeys;
         }
 
-        // 2. ai.rag.providers
-        if (isset($updates['ai']['rag']['providers']) && is_array($updates['ai']['rag']['providers'])) {
-            $origProviders = $original['ai']['rag']['providers'] ?? [];
-            foreach ($updates['ai']['rag']['providers'] as $i => &$provider) {
-                if (!is_array($provider)) {
-                    continue;
-                }
-                if (isset($provider['apiKey']) && (str_contains((string) $provider['apiKey'], '****') || $provider['apiKey'] === '********')) {
-                    $pName = $provider['name'] ?? null;
-                    $matched = false;
-                    foreach ($origProviders as $origP) {
-                        if (is_array($origP) && isset($origP['apiKey'])) {
-                            if (($pName !== null && ($origP['name'] ?? '') === $pName) || self::maskSecret($origP['apiKey']) === $provider['apiKey']) {
-                                $provider['apiKey'] = $origP['apiKey'];
-                                $matched = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (!$matched && isset($origProviders[$i]['apiKey'])) {
-                        $provider['apiKey'] = $origProviders[$i]['apiKey'];
-                    }
-                }
-            }
-            unset($provider);
-        }
-
-        // 3. Scalar secret fields
+        // 2. Scalar secret fields
         $secretFields = [
             ['admin', 'token'],
             ['cache', 'redis', 'password'],
             ['storage', 'mariadb', 'password'],
-            ['ai', 'mcp', 'rag', 'authToken'],
-            ['ai', 'rag', 'rerank', 'apiKey'],
             ['github', 'token'],
         ];
         foreach ($secretFields as $path) {
@@ -546,9 +487,6 @@ class Config
         if (isset($masked['storage']['mariadb']['password']) && (string) $masked['storage']['mariadb']['password'] !== '') {
             $masked['storage']['mariadb']['password'] = '******';
         }
-        if (isset($masked['ai']['mcp']['rag']['authToken']) && (string) $masked['ai']['mcp']['rag']['authToken'] !== '') {
-            $masked['ai']['mcp']['rag']['authToken'] = '******';
-        }
         if (isset($masked['github']['token']) && (string) $masked['github']['token'] !== '') {
             $masked['github']['token'] = self::maskSecret((string) $masked['github']['token']);
         }
@@ -569,18 +507,6 @@ class Config
             }
             unset($hVal);
         }
-        if (isset($masked['ai']['rag']['providers']) && is_array($masked['ai']['rag']['providers'])) {
-            foreach ($masked['ai']['rag']['providers'] as &$p) {
-                if (is_array($p) && isset($p['apiKey'])) {
-                    $p['apiKey'] = self::maskSecret((string) $p['apiKey']);
-                }
-            }
-            unset($p);
-        }
-        if (isset($masked['ai']['rag']['rerank']['apiKey']) && (string) $masked['ai']['rag']['rerank']['apiKey'] !== '') {
-            $masked['ai']['rag']['rerank']['apiKey'] = self::maskSecret((string) $masked['ai']['rag']['rerank']['apiKey']);
-        }
-
         if (isset($masked['security']['contentRules']['keywords']) && is_array($masked['security']['contentRules']['keywords'])) {
             $masked['security']['contentRules']['keywords'] = \App\System\SecurityService::decryptRulesList($masked['security']['contentRules']['keywords']);
         }

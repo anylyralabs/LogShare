@@ -21,18 +21,6 @@ final class ToolManager
      * 全部已知核心工具清单与分类。
      */
     public const KNOWN_TOOLS = [
-        'rag_search' => [
-            'name' => 'rag_search',
-            'title' => '知识库语义与全文检索',
-            'category' => 'retrieval',
-            'requires' => 'ai.mcp.rag',
-        ],
-        'list_topics' => [
-            'name' => 'list_topics',
-            'title' => '知识库主题地图浏览',
-            'category' => 'retrieval',
-            'requires' => 'ai.mcp.rag',
-        ],
         'web_search_exa' => [
             'name' => 'web_search_exa',
             'title' => 'Exa 互联网实时检索',

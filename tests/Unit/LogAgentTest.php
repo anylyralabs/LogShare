@@ -58,22 +58,6 @@ test('buildTools registers web_search_exa when webSearch url is set', function (
     expect($tools[0]['function']['parameters']['required'])->toContain('query');
 });
 
-test('buildTools registers both tools when both urls are set', function () {
-    $config = [
-        'mcp' => [
-            'webSearch' => ['url' => 'https://mcp.exa.ai/mcp'],
-            'rag' => ['url' => 'http://127.0.0.1:9000'],
-        ],
-    ];
-    $tools = agentCall('buildTools', [$config, null]);
-
-    expect($tools)->toHaveCount(3);
-    $names = array_column(array_column($tools, 'function'), 'name');
-    expect($names)->toContain('web_search_exa');
-    expect($names)->toContain('rag_search');
-    expect($names)->toContain('list_topics');
-});
-
 test('assistantMessageWithToolCalls formats tool calls', function () {
     $message = agentCall('assistantMessageWithToolCalls', [[
         ['id' => 'call_1', 'name' => 'web_search_exa', 'arguments' => '{"query":"x"}'],
@@ -104,9 +88,6 @@ test('executeTool returns unknown tool message', function () {
 
 test('executeTool returns not configured message for unset endpoints', function () {
     $result = agentCall('executeTool', ['web_search_exa', ['query' => 'x'], [], null, []]);
-    expect($result)->toContain('未配置');
-
-    $result = agentCall('executeTool', ['rag_search', ['query' => 'x'], [], null, []]);
     expect($result)->toContain('未配置');
 });
 
@@ -214,46 +195,28 @@ test('read_log_file does not leak other logs', function () {
     expect($result)->toContain('public from B');
     expect($result)->not->toContain('secret from A');
 });
-/* ─── Agentic RAG Plus：工具描述 / 检索策略 / 预算兜底 / crash-reports 优先 ─── */
+/* ─── 工具描述 / 检索策略 / 预算兜底 / crash-reports 优先 ─── */
 
-function agentSystemPrompt(array $config = [], ?string $logId = null, string $topicsText = ''): string
+function agentSystemPrompt(array $config = [], ?string $logId = null): string
 {
     $ref = new ReflectionClass(LogAgent::class);
     $m = $ref->getMethod('buildMessages');
-    $messages = $m->invoke(null, '测试日志内容', $logId, $config, $topicsText);
+    $messages = $m->invoke(null, '测试日志内容', $logId, $config);
     return $messages[0]['content'];
 }
-
-test('rag_search tool schema includes topic', function () {
-    $config = ['mcp' => ['rag' => ['url' => 'http://127.0.0.1:9000']]];
-    $tools = agentCall('buildTools', [$config, null]);
-    $rag = array_values(array_filter($tools, fn($t) => $t['function']['name'] === 'rag_search'));
-
-    expect($rag)->toHaveCount(1);
-    expect($rag[0]['function']['parameters']['properties'])->toHaveKey('topic');
-    expect($rag[0]['function']['description'])->toContain('知识库');
-});
 
 test('system prompt uses evidence-driven retrieval', function () {
     $system = agentSystemPrompt();
 
-    expect($system)->not->toContain('必须先调用一次 rag_search');
     expect($system)->toContain('检索策略');
     expect($system)->toContain('不超过 2 次');
     expect($system)->toContain('最多 5 次');
 });
 
-test('topic routing rule present', function () {
+test('system prompt guides direct Java Error summary retrieval', function () {
     $system = agentSystemPrompt();
-    expect($system)->toContain('patterns');
-    expect($system)->toContain('不要硬套目录');
-    expect($system)->toContain('topic 参数');
-});
-
-test('system prompt guides direct Java Error summary retrieval without rigid categories', function () {
-    $system = agentSystemPrompt();
-    expect($system)->toContain('Java Error 直接报错摘要');
-    expect($system)->toContain('大分类');
+    expect($system)->toContain('Java Error 报错摘要');
+    expect($system)->toContain('web_search_exa');
 });
 
 test('few-shot example present', function () {
@@ -279,20 +242,6 @@ test('web search hard-capped at 5', function () {
 
     expect($result)->toContain('网络搜索次数已达本次分析上限');
     expect($session->webSearchCalls)->toBe(5);
-});
-
-test('retrieval budget reminder injected', function () {
-    $session = new \App\Agent\ToolSession();
-    $session->ragSearchCalls = 5;
-    $session->webSearchCalls = 0;
-
-    $ref = new ReflectionClass(LogAgent::class);
-    $m = $ref->getMethod('executeTool');
-    // rag_search 仍执行（此处未配置端点，返回未配置文案），但合计达 6 需追加收敛提示
-    $result = $m->invoke(null, 'rag_search', ['query' => 'x'], [], null, $session);
-
-    expect($session->ragSearchCalls)->toBe(6);
-    expect($result)->toContain('检索预算提示');
 });
 
 test('list_log_files ranks crash reports first', function () {

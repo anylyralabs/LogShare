@@ -48,7 +48,6 @@ beforeEach(function () {
         'timeout' => 10,
         'mcp' => [
             'webSearch' => ['url' => $GLOBALS['mcp_url'] ?? 'http://127.0.0.1:1'],
-            'rag' => [],
         ],
     ];
     $data['cache']['enabled'] = false;

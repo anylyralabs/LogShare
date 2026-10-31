@@ -32,7 +32,6 @@ class RateLimitMiddleware implements MiddlewareInterface
         '#^(/v?1/log)/.+#',
         '#^(/v?1/insights)/.+#',
         '#^(/v?1/ai)/.+#',
-        '#^(/rag)(?:/.*)?$#',
     ];
 
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface

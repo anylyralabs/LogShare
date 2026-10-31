@@ -3,7 +3,6 @@
 namespace App\Agent;
 
 use App\Agent\Llm\AIClientGateway;
-use App\Agent\Support\McpClientFactory;
 use App\Agent\Tool\ResultTruncator;
 use App\Agent\Tool\StatusSummarizer;
 use App\Agent\Tool\ToolFactory;
@@ -20,7 +19,7 @@ use Hyperf\HttpServer\Response;
  * 本类仅保留三件事：
  *   1. analyze()：绑定 emitter、缓存与锁、组装上下文并驱动 AgentRuntime；
  *   2. 一组私有/公开薄委托，维持既有反射测试与外部调用点的行为逐字不变；
- *   3. SSE 收尾帧（缓存命中直答、错误帧）与进程级 topics 缓存。
+ *   3. SSE 收尾帧（缓存命中直答、错误帧）。
  */
 class LogAgent
 {
@@ -29,10 +28,6 @@ class LogAgent
 
     /** SSE 帧统一 JSON 编码 flags：非法 UTF-8 时替换为 U+FFFD，避免 json_encode 返回 false 产生空帧 */
     private const SSE_JSON_FLAGS = JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE;
-
-    /** fetchTopics 的进程级缓存：topics 仅随知识库重建变化，短 TTL 内直接复用 */
-    private static ?string $topicsCache = null;
-    private static int $topicsCacheExpiresAt = 0;
 
     /** 当前协程的事件发射端（SSE 直写或 Redis Stream），随协程上下文销毁 */
     private const EMITTER_CTX = 'logshare_analysis_emitter';
@@ -115,7 +110,6 @@ class LogAgent
                 mode: $mode,
                 promptVersion: $promptVersion,
                 cacheTTL: $cacheTTL,
-                topics: self::fetchTopics($config, $session),
             );
             $result = $runtime->run($ctx, $session, $config);
             if ($result->cacheable() && $cacheKey !== null) {
@@ -146,9 +140,9 @@ class LogAgent
         return (new PromptBuilder())->buildTools($config, $logId);
     }
 
-    private static function buildMessages(string $content, ?string $logId, array $config, string $topicsText = ''): array
+    private static function buildMessages(string $content, ?string $logId, array $config): array
     {
-        return (new PromptBuilder())->buildMessages($content, $logId, $config, $topicsText);
+        return (new PromptBuilder())->buildMessages($content, $logId, $config);
     }
 
     private static function defaultSystemPrompt(?string $logId): string
@@ -215,35 +209,6 @@ class LogAgent
     private static function buildCompactSummary(string $tool, string $result): string
     {
         return StatusSummarizer::compactSummary($tool, $result);
-    }
-
-    /**
-     * Fetch the knowledge base topic overview from the RAG server and inject it
-     * into the system prompt. Empty when RAG is not configured or unreachable.
-     */
-    private static function fetchTopics(array $config, ToolSession $session): string
-    {
-        $endpoint = $config['mcp']['rag'] ?? [];
-        if (($endpoint['url'] ?? '') === '') {
-            return '';
-        }
-
-        // topics 仅随知识库重建变化：进程级短 TTL 缓存，避免每次分析都做一次
-        // 完整 MCP 握手 + list_topics 调用（推高首 token 延迟）。失败不缓存，
-        // 下次分析仍会重试。
-        if (self::$topicsCache !== null && self::$topicsCacheExpiresAt > time()) {
-            return self::$topicsCache;
-        }
-
-        try {
-            $topics = McpClientFactory::call('list_topics', [], $endpoint, $session);
-            self::$topicsCache = $topics;
-            self::$topicsCacheExpiresAt = time() + 300;
-            return $topics;
-        } catch (\Exception $e) {
-            \App\Syslog::error('LogAgent', '获取知识库主题失败: ' . $e->getMessage());
-            return '';
-        }
     }
 
     /* ─── SSE emission（analyze 缓存命中直答 / 错误收尾所需）────────── */

@@ -81,7 +81,6 @@ return [
             '/1/log' => ['limit' => 30, 'window' => 60],
             '/v1/ai' => ['limit' => 10, 'window' => 60],
             '/1/ai' => ['limit' => 10, 'window' => 60],
-            '/rag' => ['limit' => 60, 'window' => 60],
         ],
     ],
 
@@ -152,69 +151,10 @@ return [
             'jobTtl' => 600,
             'failOpen' => true,
         ],
-        // 语义 RAG 增强：bge-m3 向量召回作为主排序，词法结果补充。
-        // providers 按顺序做故障切换：主供应商不可用时自动落到下一个；
-        // 模型 ID 按 provider 各自填写（硅基流动带 BAAI/ 前缀）。
-        // 注意与 ai.mcp.rag（内置 RAG MCP 服务端点）无关。开启后需重跑 rag:build 生成向量。
-        'rag' => [
-            'enabled' => false,
-            'timeout' => 30,
-            'providers' => [],
-
-            // 分块策略：heading（按标题层级）| sliding（滑窗重叠）| token（定长切分）| hybrid（混合）。
-            // 改动只影响后续构建，须重跑 rag:build 才落到索引上。
-            'chunker' => 'heading',
-
-            // 查询改写：检索前用一次轻量模型调用扩展/归一查询词。默认关闭。
-            'queryRewrite' => [
-                'enabled' => false,
-            ],
-
-            // 精排（对 RRF 融合后的候选池重排序）。任何失败都回退融合顺序，不影响检索可用性。
-            'rerank' => [
-                'enabled' => false,
-                // 送入精排的候选数，取值 2–50
-                'maxCandidates' => 30,
-                // llm = 复用主分析模型做 listwise 重排（无需额外配置）；
-                // http = 调用专用 cross-encoder 端点（Cohere / Jina / SiliconFlow bge-reranker / vLLM / Xinference）
-                'type' => 'llm',
-                // type=http 时必填：POST {baseUrl}/rerank，请求体 {"model","query","documents","top_n"}
-                'baseUrl' => '',
-                'model' => '',
-                // 端点独立密钥，留空则不带 Authorization 头（本地无鉴权服务可用）
-                'apiKey' => '',
-                'timeout' => 10,
-                // 仅当精排服务就在本机（如 TEI / xinference 监听 127.0.0.1）时开启；
-                // 只放行回环地址，私网网段一律拒绝。
-                'allowLoopback' => false,
-            ],
-
-            // 查询向量缓存（Redis + 进程内 LRU）：同一查询重复检索时零 embedding 调用。
-            'semanticCache' => true,
-
-            // 增量构建：只重索引 mtime 变化的文件，配合 GET /rag/build/stale 与 POST /rag/build/incremental。
-            'incrementalBuild' => false,
-
-            // 检索链路遥测：按自然日累计各阶段耗时与命中，供 GET /rag/telemetry 读取。
-            'telemetry' => [
-                'enabled' => true,
-                // 超过该毫秒数的查询进入慢查询明细
-                'slowMs' => 500,
-            ],
-        ],
         'mcp' => [
             'webSearch' => [
                 'url' => 'https://mcp.exa.ai/mcp',
                 'headers' => [],
-            ],
-            'rag' => [
-                // 内置 RAG MCP server（SQLite FTS5 纯本地检索），已整合进 Hyperf 进程
-                // （主 http server 的 /rag 路径，由 RagController 承载 MCP JSON-RPC）。
-                'url' => 'http://127.0.0.1:9501/rag',
-                'headers' => [],
-                'authToken' => '',
-                // SQLite 数据库路径（相对项目根）
-                'db' => 'rag/index.db',
             ],
         ],
     ],

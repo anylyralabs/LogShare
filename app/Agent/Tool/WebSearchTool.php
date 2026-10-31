@@ -16,8 +16,8 @@ final class WebSearchTool extends AbstractConfiguredTool
 
     protected function description(): string
     {
-        return '搜索互联网，查找知识库未覆盖的公开问题：新版本 mod/服务端兼容性、小众报错、官方公告等。'
-            . '知识库检索无果后再使用；查询词与 rag_search 相同，使用错误类名或报错关键词原文。';
+        return '搜索互联网，查找新版本 mod/服务端兼容性、小众报错、官方公告等公开问题。'
+            . '查询词使用错误类名或报错关键词原文。';
     }
 
     protected function parameterSchema(): array

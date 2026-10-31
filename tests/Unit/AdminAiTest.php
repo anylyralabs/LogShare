@@ -53,7 +53,7 @@ test('AnalysisRecordManager records and lists analyses with filtering', function
         cacheKey: 'sample_cache_key_1',
         success: true,
         rounds: 2,
-        toolCallChain: [['name' => 'rag_search']],
+        toolCallChain: [['name' => 'web_search_exa']],
         metrics: ['durationMs' => 2500],
         validation: [
             'structuredOutput' => [
@@ -224,9 +224,9 @@ test('PromptManager manages prompt versions and lifecycle', function () {
 test('ToolManager manages tool availability and configuration', function () {
     $tools = ToolManager::listTools();
     expect($tools)->toBeArray();
-    expect(count($tools))->toBe(9);
+    expect(count($tools))->toBe(7);
 
-    expect(ToolManager::isToolEnabled('rag_search'))->toBeTrue();
+    expect(ToolManager::isToolEnabled('grep_log_file'))->toBeTrue();
 
     // Disable a tool
     ToolManager::setToolEnabled('web_search_exa', false);
@@ -237,10 +237,10 @@ test('ToolManager manages tool availability and configuration', function () {
     expect(ToolManager::isToolEnabled('web_search_exa'))->toBeTrue();
 
     // Update config
-    ToolManager::updateToolConfig('rag_search', ['maxRetries' => 4]);
+    ToolManager::updateToolConfig('grep_log_file', ['maxRetries' => 4]);
     $updatedTools = ToolManager::listTools();
     foreach ($updatedTools as $t) {
-        if ($t['name'] === 'rag_search') {
+        if ($t['name'] === 'grep_log_file') {
             expect($t['maxRetries'])->toBe(4);
         }
     }

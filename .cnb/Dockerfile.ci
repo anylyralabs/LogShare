@@ -17,7 +17,7 @@ COPY --from=composer:2.8.9 /usr/bin/composer /usr/bin/composer
 # 与生产 Dockerfile 保持同一取舍
 ADD https://github.com/mlocati/docker-php-extension-installer/releases/download/2.7.0/install-php-extensions /usr/local/bin/install-php-extensions
 RUN chmod +x /usr/local/bin/install-php-extensions \
-    && install-php-extensions pdo_mysql pdo_sqlite redis zip pcntl posix sockets mbstring brotli pcov
+    && install-php-extensions pdo_mysql redis zip pcntl posix sockets mbstring brotli pcov
 
 ARG SWOOLE_VERSION=6.2.0
 RUN apt-get update && apt-get install -y --no-install-recommends \

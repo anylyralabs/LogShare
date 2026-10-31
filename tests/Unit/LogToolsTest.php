@@ -47,23 +47,6 @@ test('ToolFactory schema matches PromptBuilder for webSearch only', function () 
     expect($registry->schemas())->toEqual($expected);
 });
 
-test('ToolFactory schema matches PromptBuilder for webSearch + rag', function () {
-    $config = [
-        'mcp' => [
-            'webSearch' => ['url' => 'https://mcp.exa.ai/mcp'],
-            'rag' => ['url' => 'http://127.0.0.1:9000'],
-        ],
-    ];
-    $logId = null;
-
-    $registry = ToolFactory::build($config, $logId);
-    $promptBuilder = new PromptBuilder();
-    $expected = $promptBuilder->buildTools($config, $logId);
-
-    expect($registry->schemas())->toEqual($expected);
-    expect($registry->names())->toBe(['web_search_exa', 'rag_search', 'list_topics']);
-});
-
 test('ToolFactory schema matches PromptBuilder for github enabled', function () {
     $config = ['github' => ['enabled' => true]];
     $logId = null;
@@ -102,11 +85,10 @@ test('ToolFactory schema matches PromptBuilder for combined config (all tools)',
     $log = new \App\Log();
     $rawId = $log->put("main\n", null, [], null, null)->get();
 
-    // 同时开启 webSearch + rag + github + 文件工具：一次覆盖全部 8 类工具
+    // 同时开启 webSearch + github + 文件工具：覆盖全部工具类型
     $config = [
         'mcp' => [
             'webSearch' => ['url' => 'https://mcp.exa.ai/mcp'],
-            'rag' => ['url' => 'http://127.0.0.1:9000'],
         ],
         'github' => ['enabled' => true],
     ];
@@ -116,7 +98,7 @@ test('ToolFactory schema matches PromptBuilder for combined config (all tools)',
 
     expect($registry->schemas())->toEqual($expected);
     expect($registry->names())->toBe([
-        'web_search_exa', 'rag_search', 'list_topics',
+        'web_search_exa',
         'github_list_repos', 'github_search', 'github_get_content',
         'list_log_files', 'read_log_file', 'grep_log_file',
     ]);
@@ -155,17 +137,4 @@ test('web_search_exa budget cap returns limit text', function () {
 
     expect($result->content)->toContain('网络搜索次数已达本次分析上限');
     expect($session->webSearchCalls)->toBe(5);
-});
-
-test('rag_search budget reminder appended when total reaches 6', function () {
-    $config = ['mcp' => ['rag' => ['url' => 'http://127.0.0.1:9000']]];
-    $registry = ToolFactory::build($config, null);
-    $session = new ToolSession();
-    $session->ragSearchCalls = 5;
-    $session->webSearchCalls = 0;
-
-    $result = $registry->execute('rag_search', ['query' => 'test'], $session);
-
-    expect($session->ragSearchCalls)->toBe(6);
-    expect($result->content)->toContain('检索预算提示');
 });

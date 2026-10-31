@@ -78,15 +78,10 @@ $endpoints = [
     ['GET', '/v1/admin/telemetry/stats', [], null, 'Admin 遥测统计聚合'],
     ['GET', '/v1/admin/system/logs?limit=10', [], null, 'Admin 系统诊断日志'],
 
-    // 5. Admin RAG 知识库
-    ['GET', '/v1/admin/rag/stats', [], null, 'Admin RAG 统计信息'],
-    ['GET', '/v1/admin/rag/topics', [], null, 'Admin RAG 主题列表'],
-    ['GET', '/v1/admin/rag/docs', [], null, 'Admin RAG 文档检索'],
-
-    // 6. Admin 配置接口
+    // 5. Admin 配置接口
     ['GET', '/v1/admin/config', [], null, 'Admin 配置读取 (脱敏)'],
 
-    // 7. 已知领域知识接口
+    // 6. 已知领域知识接口
     ['GET', '/v1/admin/ai/domain-knowledge', [], null, 'Admin 领域知识列表获取'],
 ];
 

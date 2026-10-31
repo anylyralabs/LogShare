@@ -252,7 +252,7 @@ test('AgentRuntime emits limit frame and marks failure when rounds exhausted', f
 test('AgentRuntime injects convergence system message when retrieval budget reached', function () {
     $registry = rtRegistry();
     $web = rtTool('web_search_exa', function ($args, ToolSession $s) {
-        $s->webSearchCalls = 5; // 模拟预算耗尽
+        $s->webSearchCalls = 6; // 模拟预算耗尽
         return 'web result';
     });
     $registry->register($web);
@@ -281,24 +281,22 @@ test('AgentRuntime injects convergence system message when retrieval budget reac
 
 test('AgentRuntime fallback chain keeps single tool failure from blocking analysis', function () {
     $registry = rtRegistry();
-    $rag = rtTool('rag_search', fn () => throw new App\Agent\Tool\ToolExecutionException('rag down'));
-    // 让 rag 的 fallback 指向 web
-    $rag = new class extends App\Agent\Tool\AbstractTool {
-        public function name(): string { return 'rag_search'; }
+    $github = new class extends App\Agent\Tool\AbstractTool {
+        public function name(): string { return 'github_search'; }
         protected function description(): string { return 'd'; }
         protected function parameterSchema(): array { return $this->objectSchema([]); }
         public function run(array $arguments, ToolSession $session): string {
-            throw new App\Agent\Tool\ToolExecutionException('rag down');
+            throw new App\Agent\Tool\ToolExecutionException('github down');
         }
         public function retryStrategy(): App\Agent\Tool\RetryStrategy { return App\Agent\Tool\RetryStrategy::none(); }
         public function fallbackTools(): array { return ['web_search_exa']; }
     };
     $web = rtTool('web_search_exa', fn () => 'web fallback hit');
-    $registry->register($rag);
+    $registry->register($github);
     $registry->register($web);
 
     $gateway = new ScriptedGateway([
-        ['toolCalls' => [['id' => 'c1', 'name' => 'rag_search', 'arguments' => '{}']]],
+        ['toolCalls' => [['id' => 'c1', 'name' => 'github_search', 'arguments' => '{}']]],
         ['content' => 'final'],
     ]);
     [$runtime, $emitter] = rtBuild($registry, $gateway);
@@ -307,11 +305,11 @@ test('AgentRuntime fallback chain keeps single tool failure from blocking analys
 
     $result = $runtime->run($ctx, $session, []);
     expect($result->success)->toBeTrue();
-    // tool_result 帧 name 仍是请求的 rag_search（对齐 SSE 逐帧一致）
+    // tool_result 帧 name 仍是请求的 github_search（对齐 SSE 逐帧一致）
     $toolResultFrames = array_values(array_filter($emitter->frames, fn($f) => str_contains($f['data'], '"tool_result"')));
     expect(count($toolResultFrames))->toBe(1);
     $decoded = json_decode($toolResultFrames[0]['data'], true);
-    expect($decoded['name'])->toBe('rag_search');
+    expect($decoded['name'])->toBe('github_search');
     // 但会话链记录了实际产出者 web_search_exa，供验证/评分使用
     expect($session->toolCallChain[0]['name'])->toBe('web_search_exa');
     expect($web->calls)->toBe(1);

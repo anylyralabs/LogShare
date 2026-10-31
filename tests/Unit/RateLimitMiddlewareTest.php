@@ -30,7 +30,6 @@ test('RateLimitMiddleware normalizePath collapses dynamic segments', function ()
     expect(RateLimitMiddleware::normalizePath('/v1/log/xyz'))->toBe('/v1/log/*');
     expect(RateLimitMiddleware::normalizePath('/v1/insights/test'))->toBe('/v1/insights/*');
     expect(RateLimitMiddleware::normalizePath('/v1/ai/analyse'))->toBe('/v1/ai/*');
-    expect(RateLimitMiddleware::normalizePath('/rag/search'))->toBe('/rag/*');
     expect(RateLimitMiddleware::normalizePath('/v1/limits'))->toBe('/v1/limits');
 });
 

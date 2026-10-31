@@ -23,7 +23,6 @@ final class AgentContext
         public readonly string $mode = AnalysisMode::DEEP,
         public readonly string $promptVersion = 'v1',
         public readonly int $cacheTTL = 1800,
-        public readonly string $topics = '',
     ) {
     }
 }

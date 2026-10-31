@@ -263,7 +263,6 @@ jobs:
       MARIADB_ROOT_PASSWORD: ci-placeholder
       REDIS_PASSWORD: ci-placeholder
       ADMIN_TOKEN: ci-placeholder
-      AI_MCP_RAG_AUTH_TOKEN: ci-placeholder
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -282,7 +281,6 @@ jobs:
           sed -i 's/change-me/ci-placeholder/g' .env
           echo "ADMIN_ENABLED=true" >> .env
           echo "ADMIN_TOKEN=ci-placeholder" >> .env
-          echo "AI_MCP_RAG_AUTH_TOKEN=ci-placeholder" >> .env
           # OpenLiteWaf 解封端点令牌：nginx 与冒烟测试脚本必须取到同一个值，
           # 否则 /security/unban 一律 404，运行时解封通道就没有被真正验证过
           echo "OPENLITEWAF_ADMIN_TOKEN=ci-openlitewaf-token" >> .env
@@ -330,7 +328,7 @@ jobs:
           # 执行涵盖 Nginx 反代、HTTPS、OpenLiteWaf 防护与 OpenLiteStats 的全量真实环境测试
           # OPENLITEWAF_ADMIN_TOKEN 与写入 .env 的值保持一致，供解封通道自检断言使用
           OPENLITEWAF_ADMIN_TOKEN=ci-openlitewaf-token \
-            php scripts/ci_e2e_test.php --base-url=https://localhost --admin-token=ci-placeholder --rag-token=ci-placeholder --waf-test || {
+            php scripts/ci_e2e_test.php --base-url=https://localhost --admin-token=ci-placeholder --waf-test || {
             echo '=== 测试失败，输出容器日志 ==='
             docker compose --env-file .env -f docker/compose.yaml logs
             docker compose --env-file .env -f docker/compose.yaml down

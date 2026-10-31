@@ -3,7 +3,7 @@
 # 与原 GitHub Actions 的 docker job 等价：构建 docker/compose.yaml 全栈
 # （Hyperf + Nginx/OpenResty + OpenLiteWaf + OpenLiteStats + MariaDB + Redis），
 # 自签证书起 HTTPS，再跑 scripts/ci_e2e_test.php --waf-test 覆盖反代、TLS、
-# WAF 拦截与解封、统计页、完整日志生命周期与 Admin/RAG 端点。
+# WAF 拦截与解封、统计页、完整日志生命周期与 Admin 端点。
 #
 # 这里刻意不使用 .cnb/Dockerfile.ci：E2E 要测的就是生产自带的 hyperf 镜像，
 # 换成 CI 镜像会绕开 SpinYarn / jemalloc 等真实构建产物。
@@ -22,7 +22,6 @@
     MARIADB_ROOT_PASSWORD: ci-placeholder
     REDIS_PASSWORD: ci-placeholder
     ADMIN_TOKEN: ci-placeholder
-    AI_MCP_RAG_AUTH_TOKEN: ci-placeholder
     OPENLITEWAF_ADMIN_TOKEN: ci-openlitewaf-token
   stages:
     - name: 构建生产镜像
@@ -48,7 +47,6 @@
         cat >> .env <<'ENVEOF'
         ADMIN_ENABLED=true
         ADMIN_TOKEN=ci-placeholder
-        AI_MCP_RAG_AUTH_TOKEN=ci-placeholder
         OPENLITEWAF_ADMIN_TOKEN=ci-openlitewaf-token
         ENVEOF
         # compose 从 docker/ 目录读 .env，复制一份保持一致
@@ -126,7 +124,6 @@
           php scripts/ci_e2e_test.php \
             --base-url="https://$DOMAIN" \
             --admin-token=ci-placeholder \
-            --rag-token=ci-placeholder \
             --waf-test || {
           echo "=== E2E 失败，输出容器日志 ==="; $UP logs; $UP down; exit 1
         }

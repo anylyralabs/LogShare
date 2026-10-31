@@ -52,7 +52,7 @@ final class AgentRuntime
         if ($window->anchorLine !== null) {
             $session->markRangeChecked($window->startLine, $window->endLine);
         }
-        $messages = $this->prompt->buildMessages($ctx->content, $ctx->logId, $config, $ctx->topics, $ctx->mode);
+        $messages = $this->prompt->buildMessages($ctx->content, $ctx->logId, $config, $ctx->mode);
 
         $this->tracer->start($ctx);
 
@@ -176,14 +176,14 @@ final class AgentRuntime
 
     private function retrievalBudgetReached(ToolSession $session, array $limits): bool
     {
-        return ($session->ragSearchCalls + $session->webSearchCalls) >= $limits['maxTotalRetrieval'];
+        return $session->webSearchCalls >= $limits['maxTotalRetrieval'];
     }
 
     private function contentForModel(string $name, string $result): string
     {
         return match ($name) {
             'read_log_file' => $result,
-            'rag_search', 'web_search_exa', 'grep_log_file', 'github_search', 'github_get_content'
+            'web_search_exa', 'grep_log_file', 'github_search', 'github_get_content'
                 => ResultTruncator::truncate($result, self::MAX_RETRIEVAL_RESULT_BYTES),
             default => ResultTruncator::truncate($result),
         };

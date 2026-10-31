@@ -76,7 +76,7 @@ services:
       # 映射表只读挂载：宿主机目录为空时反混淆全透传（返回原文，属预期降级），部署前请确认映射表已下载
       - ../mappings:/app/mappings:ro
       - ../OpenLiteWaf/data:/app/OpenLiteWaf/data:ro
-      # 完整业务配置（AI 密钥、语义 RAG、生产域名等）挂载到容器内，
+      # 完整业务配置（AI 密钥、生产域名等）挂载到容器内，
       # 文件不存在时自动回退 Config.inc.example.php；该文件已被 .gitignore 排除
       - ../Config.inc.php:/app/Config.inc.php:ro
       - ../.env:/app/.env:ro
@@ -94,14 +94,11 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
       ADMIN_ENABLED: ${ADMIN_ENABLED:-true}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
-      AI_MCP_RAG_AUTH_TOKEN: ${AI_MCP_RAG_AUTH_TOKEN:-}
       AI_ENABLED: ${AI_ENABLED:-false}
       AI_API_KEYS: ${AI_API_KEYS:-}
       AI_BASE_URL: ${AI_BASE_URL:-}
       AI_MODEL: ${AI_MODEL:-}
       AI_HEADERS: ${AI_HEADERS:-}
-      AI_RAG_ENABLED: ${AI_RAG_ENABLED:-false}
-      AI_RAG_PROVIDERS: ${AI_RAG_PROVIDERS:-}
       # 边缘 WAF 解封令牌的调用方（Admin 后台点"解封"时内部调用 https://nginx/security/unban）。
       # OpenLiteWaf/data 保持只读挂载：应用容器不需要、也不应有权改写 nginx 的权威状态文件
       OPENLITEWAF_ADMIN_TOKEN: ${OPENLITEWAF_ADMIN_TOKEN:-}

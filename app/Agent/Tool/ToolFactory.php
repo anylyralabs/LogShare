@@ -33,17 +33,7 @@ final class ToolFactory
             $registry->register(new WebSearchTool($config, $logId));
         }
 
-        // 2. rag_search + list_topics
-        if (!empty($mcp['rag']['url']) && $mode !== AnalysisMode::QUICK) {
-            if (ToolManager::isToolEnabled('rag_search', $config)) {
-                $registry->register(new RagSearchTool($config, $logId));
-            }
-            if (ToolManager::isToolEnabled('list_topics', $config)) {
-                $registry->register(new ListTopicsTool($config, $logId));
-            }
-        }
-
-        // 3. github_* 工具
+        // 2. github_* 工具
         $githubConfig = $config['github'] ?? \App\Config::Get('github');
         $githubAllowed = !empty($githubConfig['enabled']) && $mode !== AnalysisMode::QUICK;
         if ($githubAllowed) {
@@ -87,8 +77,6 @@ final class ToolFactory
     {
         $registry = new ToolRegistry();
         $registry->register(new WebSearchTool($config, $logId));
-        $registry->register(new RagSearchTool($config, $logId));
-        $registry->register(new ListTopicsTool($config, $logId));
         $registry->register(new GithubListReposTool($config, $logId));
         $registry->register(new GithubSearchTool($config, $logId));
         $registry->register(new GithubGetContentTool($config, $logId));
