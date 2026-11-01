@@ -11,7 +11,7 @@ AI 智能诊断已从本仓库剥离，由外部服务提供；本仓库保留�
 - PHP 8.4+，扩展 ext-json、ext-zlib、ext-mbstring、ext-pdo_mysql
 - Swoole 6.2（常驻进程运行时）
 - MariaDB（主存储）
-- Redis（可选，用于缓存、限流与统一异步事件队列；缺少 ext-redis 时以内置 mock 优雅降级）
+- Redis（可选，用于缓存、限流与统一异步事件队列；不可用时缓存降级、队列事件改为同步执行）
 - SpinYarn 扩展（可选，原生 Rust 编写，用于混淆堆栈反解；缺失时日志原样透传）
 
 ## 安装与启动
