@@ -1,6 +1,6 @@
 [submodule "OpenLiteWaf"]
 	path = OpenLiteWaf
-	url = https://cnb.cool/MornZe-Dev/OpenLiteWaf.git
+	url = https://github.com/anylyralabs/OpenLiteWaf.git
 [submodule "OpenLiteStats"]
 	path = OpenLiteStats
-	url = https://cnb.cool/MornZe-Dev/OpenLiteStats.git
+	url = https://github.com/anylyralabs/OpenLiteStats.git

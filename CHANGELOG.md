@@ -66,6 +66,11 @@
 - 存储与部署文档改为仅 MariaDB；`docker/mariadb-events.sql` 按当前 TTL 重新生成分区布局。
 - 封禁文件改为原子写入并 `chmod 0600`；WAF 内部调用的 `Host` 改为从 `urls.apiBaseUrl` 推导，测试部署不再需要改代码。
 
+### 仓库与子模块
+
+- 主仓与两个子模块的远端迁移至 GitHub `anylyralabs`；`.gitmodules` 与子模块 origin 同步更新。
+- `OpenLiteWaf` / `OpenLiteStats` 移除已下线 AI、telemetry、admin 端点的 body 豁免与统计排除项，测试临时目录从 Termux 路径统一到 `/tmp`。
+
 ### 保留
 
 - Codex 本地日志解析能力：`POST /v1/analyse`、`GET /v1/insights/{id}`，以及上传时的格式/版本识别。

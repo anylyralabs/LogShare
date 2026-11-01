@@ -7,7 +7,7 @@
 - `bin/hyperf.php`：CLI 与服务入口；`core.php`：引导并加载 `Config.inc.php`；PSR-4 将 `App\` 映射到 `app/`。
 - HTTP 监听 `0.0.0.0:9501`（`config/autoload/server.php`）。控制器使用 Hyperf 注解路由，前缀 `/{version:v?1}` 同时匹配已弃用的 `/1` 与 `/v1`。
 - 存储后端固定为 MariaDB（`storage.storageId` = `s`）；日志 ID 首字符为存储标识。Redis 不是硬依赖，缺失时缓存降级、队列事件改为同步执行。
-- `OpenLiteWaf/`、`OpenLiteStats/` 是独立仓库的 git submodule（`cnb.cool/MornZe-Dev/*`），有自己的测试与发布流程；改动需在各自仓库提交，再回主仓更新指针。
+- `OpenLiteWaf/`、`OpenLiteStats/` 是独立仓库的 git submodule（GitHub `anylyralabs/*`），有自己的测试与发布流程；改动需在各自仓库提交，再回主仓更新指针。
 - 参考文档：`OpenLiteWaf/README.md`、`docs/`、`CHANGELOG.md`；`LOCAL_DEV_NOTES.md` 仅本地、被 `.git/info/exclude` 排除，永不提交。
 
 ## 开发命令

@@ -48,7 +48,7 @@ php scripts/widen_token_column.php
 
 ## Docker 部署
 
-> 仓库以 submodule 引用边缘 WAF（`OpenLiteWaf/`，独立仓库 [anylyralabs/OpenLiteWaf](https://github.com/anylyralabs/OpenLiteWaf)，MIT）。clone 后先执行 `git submodule update --init --recursive`；已部署机器可 `git config submodule.recurse true` 让后续 `git pull` 自动跟随 submodule 更新。
+> 仓库以 submodule 引用边缘 WAF（`OpenLiteWaf/`，独立仓库 [anylyralabs/OpenLiteWaf](https://github.com/anylyralabs/OpenLiteWaf)，MIT）与站点统计（`OpenLiteStats/`，[anylyralabs/OpenLiteStats](https://github.com/anylyralabs/OpenLiteStats)，MIT）。clone 后先执行 `git submodule update --init --recursive`；已部署机器可 `git config submodule.recurse true` 让后续 `git pull` 自动跟随 submodule 更新。
 
 ```bash
 docker compose -f docker/compose.yaml up -d --build
