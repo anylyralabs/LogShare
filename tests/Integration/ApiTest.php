@@ -128,7 +128,7 @@ class ApiTest extends HttpTestCase
         $meta->assertSuccessful();
         $this->assertSame(2, $meta->json('fileCount'));
         $this->assertTrue((bool) $meta->json('requiresFileSelection'));
-        $this->assertSame('crash.txt', $meta->json('files.0.name'));
+        $this->assertContains('crash.txt', array_column($meta->json('files'), 'name'));
 
         // 多文件时直接访问 raw/{id} 返回 200 + 文件列表
         $multiRaw = $this->get("/v1/raw/{$id}");

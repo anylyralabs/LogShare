@@ -642,11 +642,15 @@ class Log
      */
     public function getFiles(): array
     {
-        return array_map(static fn(array $file): array => [
+        $files = array_map(static fn(array $file): array => [
             'name' => $file['name'],
             'size' => strlen($file['data']),
             'lines' => substr_count($file['data'], "\n") + 1,
         ], $this->files);
+        // 缓存命中时保留上传顺序，数据库回源时按 name 排序；统一按名称排序，
+        // 避免同一个 ID 在不同缓存状态下返回不同的文件顺序。
+        usort($files, static fn(array $a, array $b): int => strcmp($a['name'], $b['name']));
+        return $files;
     }
 
     /**
