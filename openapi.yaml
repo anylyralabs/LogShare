@@ -3,35 +3,15 @@ info:
   title: LogShare API
   version: 1.8.5
   description: |
-    Minecraft / Hytale log analysis and sharing platform.
-    
-    ## Authentication
-    
-    Most endpoints are public. Log deletion requires a Bearer token returned on creation.
-    
-    ## Rate Limiting
-    
-    Rate limiting is enforced at the edge: nginx `limit_req` (30 r/s, burst 60)
-    plus OpenLiteWaf CC defense (240 requests / 10 s window). Exceeding the
-    edge limits returns `429 Too Many Requests` (CC) or `503` (limit_req);
-    the CC response carries a `Retry-After` header.
+    Minecraft / Hytale log sharing platform.
 
-    The application-level `RateLimitMiddleware` exists but is NOT registered,
-    so it does not currently contribute any limit.
-    
-    ## Content Filtering
-    
-    All submitted logs are pre-filtered for:
-    - IPv4/IPv6 addresses (full & compressed)
-    - UUIDs (standard, brace, URN formats)
-    - Xbox XUIDs (16-digit decimal)
-    - Session/auth tokens (JWT, Bearer, access_token)
-    - Client/device/instance IDs
-    - Minecraft coordinates (BlockPos, Vec3d, command formats)
-    - Usernames (Windows/Linux paths, USERNAME=)
-    - Access tokens (various JSON keys, headers)
-    
-    Filters run in the above order. Original content is not stored.
+    A log is a set of files, not a single body. Upload accepts `files` only;
+    each file is filtered and deobfuscated independently. Full Codex analysis
+    runs only when an insights endpoint is called.
+
+    Multi-file logs return `200` plus a file list when accessed without a
+    filename. Clients should ask the user which file to open, then request
+    `/raw/{id}/{filename}` or `/insights/{id}/{filename}`.
 servers:
   - url: https://api.logshare.cn
     description: Production API
@@ -41,7 +21,7 @@ tags:
   - name: Logs
     description: Log submission, retrieval, deletion
   - name: Analysis
-    description: Log analysis and insights
+    description: Per-file Codex analysis
   - name: Meta
     description: Upload limits
 paths:
@@ -49,7 +29,6 @@ paths:
     get:
       tags: [Meta]
       summary: API index
-      description: Returns list of all available endpoints
       operationId: getIndex
       responses:
         '200':
@@ -58,75 +37,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/IndexResponse'
-              example:
-                success: true
-                message: "LogShare API"
-                endpoints:
-                  - "POST /1/log"
-                  - "DELETE /1/log/{id}"
-                  - "POST /1/analyse"
-                  - "GET /1/limits"
-                  - "GET /1/raw/{id}"
-                  - "GET /1/insights/{id}"
   /1/log:
     post:
       tags: [Logs]
-      summary: Submit a log
-      description: |
-        Accepts raw log content as `application/x-www-form-urlencoded` or `application/json`.
-        Supports `br`/`gzip`/`deflate` `Content-Encoding`. Server default responds with Brotli compression when requested.
-        
-        **Form fields (urlencoded or JSON):**
-        - `content` (string, required): Raw log text (max 10 MB, 50k lines)
-        - `metadata[]` (array, optional): Array of `{key, value}` objects
-        - `source` (string, optional): Free-form source identifier
-        
-        Returns a log ID and a deletion token. **Save the token** — it cannot be recovered.
-
-        De-duplication: when an identical upload (same body + same attached files + same `source`)
-        already exists, the response reuses the existing `id`, but the returned `token` is a fresh
-        value that was **not** stored and therefore cannot delete that log. Use the token from the
-        original upload. The response also carries `deduplicated: true` in this case.
-        
-        (Deprecated; use /v1/log instead)
-      operationId: createLog
+      summary: Submit a log (deprecated prefix)
       deprecated: true
+      operationId: createLog
       requestBody:
-        required: true
-        content:
-          application/x-www-form-urlencoded:
-            schema:
-              type: object
-              required: [content]
-              properties:
-                content:
-                  type: string
-                  format: binary
-                  description: Raw log content
-                metadata:
-                  type: array
-                  maxItems: 100
-                  items:
-                    $ref: '#/components/schemas/MetadataEntry'
-                source:
-                  type: string
-                  maxLength: 64
-          application/json:
-            schema:
-              type: object
-              required: [content]
-              properties:
-                content:
-                  type: string
-                  description: Raw log content
-                metadata:
-                  type: array
-                  maxItems: 100
-                  items:
-                    $ref: '#/components/schemas/MetadataEntry'
-                source:
-                  type: string
-                  maxLength: 64
+        $ref: '#/components/requestBodies/LogUpload'
       responses:
         '200':
           description: Log created
@@ -134,146 +52,21 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LogCreateResponse'
-              example:
-                success: true
-                message: "Log submitted successfully"
-                id: "sAbCdEf"
-                url: "https://logshare.cn/sAbCdEf"
-                raw: "https://api.logshare.cn/1/raw/sAbCdEf"
-                token: "3f9c1a7d5e2b8046c1d9f3a70b5e28461c7a9d0e3f5b8124c6d7e9f0a1b2c3d4"
-                deduplicated: false
         '400':
           $ref: '#/components/responses/BadRequest'
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
-        '429':
-          $ref: '#/components/responses/RateLimited'
-    delete:
-      tags: [Logs]
-      summary: Delete one or more logs
-      description: |
-        Requires `Authorization: Bearer <token>` header with the token returned on creation.
-        Multiple IDs can be comma-separated in the path: `/1/log/id1,id2,id3`
-        
-        (Deprecated; use /v1/log instead)
-      operationId: deleteLogs
-      deprecated: true
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            pattern: '^[a-zA-Z0-9]{7}(,[a-zA-Z0-9]{7})*$'
-          description: Comma-separated log IDs (7 chars each)
-          example: "sAbCdEf,fGhIjK"
-      headers:
-        - name: Authorization
-          in: header
-          required: true
-          description: Bearer token from log creation
-          schema:
-            type: string
-            pattern: '^Bearer [a-f0-9]{64}$'
-          example: "Bearer 3f9c1a7d5e2b8046c1d9f3a70b5e28461c7a9d0e3f5b8124c6d7e9f0a1b2c3d4"
-      responses:
-        '200':
-          description: Deletion result
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/LogDeleteResponse'
-              example:
-                success: true
-                message: "Log deletion completed"
-                deleted:
-                  - "sAbCdEf"
-                failed: []
-                total: 1
-                deletedCount: 1
-                failedCount: 0
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/RateLimited'
   /v1/log:
     post:
       tags: [Logs]
       summary: Submit a log
       description: |
-        Accepts raw log content as `application/x-www-form-urlencoded` or `application/json`.
-        Supports `br`/`gzip`/`deflate` `Content-Encoding`. Server default responds with Brotli compression when requested.
-        
-        **Form fields (urlencoded or JSON):**
-        - `content` (string, required): Raw log text (max 10 MB, 50k lines)
-        - `metadata[]` (array, optional): Array of `{key, value}` objects
-        - `source` (string, optional): Free-form source identifier (e.g. `fcl/1.2.0`, `pojav-glow-worm/3.4.0`)
-        
-        **Integration Best Practice:**
-        Clients and launchers should upload all three parts whenever available: game log (`latest.log`) + crash report (`crash-reports/*.txt`) + launcher log (`launcher.log`), and always provide the `source` identifier.
-        
-        Returns a log ID and a deletion token. **Save the token** — it cannot be recovered.
-
-        De-duplication: when an identical upload (same body + same attached files + same `source`)
-        already exists, the response reuses the existing `id`, but the returned `token` is a fresh
-        value that was **not** stored and therefore cannot delete that log. Use the token from the
-        original upload. The response also carries `deduplicated: true` in this case.
+        Accepts `files`, `metadata` and `source` as JSON or form-urlencoded.
+        Files may be plain text or ZIP archives (auto-expanded). Limits:
+        200 files and 20 MiB total after expansion. No per-file size/line limit.
       operationId: createLogV1
       requestBody:
-        required: true
-        content:
-          application/x-www-form-urlencoded:
-            schema:
-              type: object
-              required: [content]
-              properties:
-                content:
-                  type: string
-                  format: binary
-                  description: Raw log content
-                metadata:
-                  type: array
-                  maxItems: 100
-                  items:
-                    $ref: '#/components/schemas/MetadataEntry'
-                source:
-                  type: string
-                  maxLength: 64
-          application/json:
-            schema:
-              type: object
-              required: [content]
-              properties:
-                content:
-                  type: string
-                  description: Raw log content (optional when `files` is provided)
-                files:
-                  type: array
-                  description: 'Additional files stored under the same ID. Each `content` may be plain text or a ZIP archive (auto-expanded when `name` ends with `.zip`). Limits: 200 files / 12MB total after expansion.'
-                  items:
-                    type: object
-                    required: [name, content]
-                    properties:
-                      name:
-                        type: string
-                        description: File name, may include relative sub-paths
-                      content:
-                        type: string
-                        description: File content or ZIP archive bytes
-                metadata:
-                  type: array
-                  maxItems: 100
-                  items:
-                    $ref: '#/components/schemas/MetadataEntry'
-                source:
-                  type: string
-                  maxLength: 64
+        $ref: '#/components/requestBodies/LogUpload'
       responses:
         '200':
           description: Log created
@@ -281,45 +74,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LogCreateResponse'
-              example:
-                success: true
-                message: "Log submitted successfully"
-                id: "sAbCdEf"
-                url: "https://logshare.cn/sAbCdEf"
-                raw: "https://api.logshare.cn/v1/raw/sAbCdEf"
-                token: "3f9c1a7d5e2b8046c1d9f3a70b5e28461c7a9d0e3f5b8124c6d7e9f0a1b2c3d4"
-                deduplicated: false
         '400':
           $ref: '#/components/responses/BadRequest'
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
-        '429':
-          $ref: '#/components/responses/RateLimited'
     delete:
       tags: [Logs]
       summary: Delete one or more logs
-      description: |
-        Requires `Authorization: Bearer <token>` header with the token returned on creation.
-        Multiple IDs can be comma-separated in the path: `/v1/log/id1,id2,id3`
       operationId: deleteLogsV1
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            pattern: '^[a-zA-Z0-9]{7}(,[a-zA-Z0-9]{7})*$'
-          description: Comma-separated log IDs (7 chars each)
-          example: "sAbCdEf,fGhIjK"
-      headers:
-        - name: Authorization
-          in: header
-          required: true
-          description: Bearer token from log creation
-          schema:
-            type: string
-            pattern: '^Bearer [a-f0-9]{64}$'
-          example: "Bearer 3f9c1a7d5e2b8046c1d9f3a70b5e28461c7a9d0e3f5b8124c6d7e9f0a1b2c3d4"
+        - $ref: '#/components/parameters/LogIdList'
+      security:
+        - bearerAuth: []
       responses:
         '200':
           description: Deletion result
@@ -327,391 +93,130 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LogDeleteResponse'
-              example:
-                success: true
-                message: "Log deletion completed"
-                deleted:
-                  - "sAbCdEf"
-                failed: []
-                total: 1
-                deletedCount: 1
-                failedCount: 0
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/RateLimited'
   /1/log/{id}:
     get:
       tags: [Logs]
-      summary: Get log metadata and file list
-      description: |
-        Returns log metadata (size, lines, timestamps) and the list of additional
-        files stored under this ID (without their content).
-        
-        (Deprecated; use /v1/log/{id} instead)
-      operationId: getLogMeta
+      summary: Get log metadata and file list (deprecated prefix)
       deprecated: true
+      operationId: getLogMeta
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            pattern: '^[a-zA-Z0-9]{7}$'
-          example: "sAbCdEf"
+        - $ref: '#/components/parameters/LogId'
       responses:
         '200':
-          description: Log metadata
+          description: Log metadata and files
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success: { type: boolean, example: true }
-                  id: { type: string }
-                  files:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        name: { type: string }
-                        size: { type: integer }
+                $ref: '#/components/schemas/LogMetaResponse'
         '404':
           $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/RateLimited'
     delete:
       tags: [Logs]
-      summary: Delete a single log (alternative path)
-      description: |
-        Same as `DELETE /1/log` but with ID in path. Requires Bearer token.
-        
-        (Deprecated; use /v1/log/{id} instead)
-      operationId: deleteLogById
+      summary: Delete one log (deprecated prefix)
       deprecated: true
+      operationId: deleteLogById
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            pattern: '^[a-zA-Z0-9]{7}$'
-          example: "sAbCdEf"
-      headers:
-        - name: Authorization
-          in: header
-          required: true
-          schema:
-            type: string
-            pattern: '^Bearer [a-f0-9]{64}$'
-          example: "Bearer 3f9c1a7d5e2b8046c1d9f3a70b5e28461c7a9d0e3f5b8124c6d7e9f0a1b2c3d4"
+        - $ref: '#/components/parameters/LogId'
+      security:
+        - bearerAuth: []
       responses:
         '200':
-          description: OK
+          description: Deletion result
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/LogDeleteResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/RateLimited'
   /v1/log/{id}:
     get:
       tags: [Logs]
       summary: Get log metadata and file list
-      description: |
-        Returns log metadata (size, lines, timestamps) and the list of additional
-        files stored under this ID (without their content).
       operationId: getLogMetaV1
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            pattern: '^[a-zA-Z0-9]{7}$'
-          example: "sAbCdEf"
+        - $ref: '#/components/parameters/LogId'
       responses:
         '200':
-          description: Log metadata
+          description: Log metadata and files
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success: { type: boolean, example: true }
-                  message: { type: string, example: "Log metadata retrieved successfully" }
-                  id: { type: string, example: "sAbCdEf" }
-                  size: { type: integer }
-                  lines: { type: integer }
-                  created: { type: integer, nullable: true }
-                  expires: { type: integer, nullable: true }
-                  metadata: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/MetadataEntry' } }
-                  source: { type: string, nullable: true }
-                  files:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        name: { type: string }
-                        size: { type: integer }
-                  raw: { type: string }
+                $ref: '#/components/schemas/LogMetaResponse'
         '404':
           $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/RateLimited'
     delete:
       tags: [Logs]
-      summary: Delete a single log (alternative path)
-      description: |
-        Same as `DELETE /v1/log` but with ID in path. Requires Bearer token.
+      summary: Delete one log
       operationId: deleteLogByIdV1
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            pattern: '^[a-zA-Z0-9]{7}$'
-          example: "sAbCdEf"
-      headers:
-        - name: Authorization
-          in: header
-          required: true
-          schema:
-            type: string
-            pattern: '^Bearer [a-f0-9]{64}$'
-          example: "Bearer 3f9c1a7d5e2b8046c1d9f3a70b5e28461c7a9d0e3f5b8124c6d7e9f0a1b2c3d4"
+        - $ref: '#/components/parameters/LogId'
+      security:
+        - bearerAuth: []
       responses:
         '200':
-          description: OK
+          description: Deletion result
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/LogDeleteResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/RateLimited'
-  /1/analyse:
-    post:
-      tags: [Analysis]
-      summary: Analyse log content without storing
-      description: |
-        Runs full Codex analysis (version detection, mod detection, crash parsing, etc.)
-        on the provided content without persisting it. Returns structured analysis result.
-        
-        (Deprecated; use /v1/analyse instead)
-      operationId: analyseLog
-      deprecated: true
-      requestBody:
-        required: true
-        content:
-          application/x-www-form-urlencoded:
-            schema:
-              type: object
-              required: [content]
-              properties:
-                content:
-                  type: string
-                  format: binary
-          application/json:
-            schema:
-              type: object
-              required: [content]
-              properties:
-                content:
-                  type: string
-      responses:
-        '200':
-          description: Analysis result
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AnalysisResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '413':
-          $ref: '#/components/responses/PayloadTooLarge'
-        '429':
-          $ref: '#/components/responses/RateLimited'
-  /v1/analyse:
-    post:
-      tags: [Analysis]
-      summary: Analyse log content without storing
-      description: |
-        Runs full Codex analysis (version detection, mod detection, crash parsing, etc.)
-        on the provided content without persisting it. Returns structured analysis result.
-      operationId: analyseLogV1
-      requestBody:
-        required: true
-        content:
-          application/x-www-form-urlencoded:
-            schema:
-              type: object
-              required: [content]
-              properties:
-                content:
-                  type: string
-                  format: binary
-          application/json:
-            schema:
-              type: object
-              required: [content]
-              properties:
-                content:
-                  type: string
-      responses:
-        '200':
-          description: Analysis result
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AnalysisResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '413':
-          $ref: '#/components/responses/PayloadTooLarge'
-        '429':
-          $ref: '#/components/responses/RateLimited'
   /1/raw/{id}:
     get:
       tags: [Logs]
-      summary: Get raw log content
-      description: |
-        Returns the original (filtered) log text as `text/plain`
-        
-        (Deprecated; use /v1/raw/{id} instead)
+      summary: Read a single file or list files (deprecated prefix)
+      deprecated: true
       operationId: getRawLog
-      deprecated: true
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            pattern: '^[a-zA-Z0-9]{7}$'
-          example: "sAbCdEf"
+        - $ref: '#/components/parameters/LogId'
       responses:
         '200':
-          description: Raw log content
+          description: File content for single-file logs, or a file list for multi-file logs
           content:
             text/plain:
               schema:
                 type: string
-              example: |
-                [12:34:56] [Server thread/INFO]: Starting minecraft server version 1.20.1
-                [12:34:56] [Server thread/INFO]: Loading properties
-                ...
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/RateLimited'
-  /1/raw/{id}/{filename}:
-    get:
-      tags: [Logs]
-      summary: Get a specific additional file of a log
-      description: |
-        Returns one additional file of a multi-file log as `text/plain`.
-        `filename` may contain sub-paths (URL-encoded). Path traversal is rejected.
-        
-        (Deprecated; use /v1/raw/{id}/{filename} instead)
-      operationId: getRawFile
-      deprecated: true
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            pattern: '^[a-zA-Z0-9]{7}$'
-          example: "sAbCdEf"
-        - name: filename
-          in: path
-          required: true
-          schema:
-            type: string
-            pattern: '^[^/].*[^/]$'
-          example: "crash-reports/crash-01.txt"
-      responses:
-        '200':
-          description: File content
-          content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/FileListResponse'
         '404':
           $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/RateLimited'
   /v1/raw/{id}:
     get:
       tags: [Logs]
-      summary: Get raw log content
-      description: |
-        Returns the original (filtered) log text as `text/plain`
+      summary: Read a single file or list files
       operationId: getRawLogV1
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            pattern: '^[a-zA-Z0-9]{7}$'
-          example: "sAbCdEf"
+        - $ref: '#/components/parameters/LogId'
       responses:
         '200':
-          description: Raw log content
+          description: File content for single-file logs, or a file list for multi-file logs
           content:
             text/plain:
               schema:
                 type: string
-              example: |
-                [12:34:56] [Server thread/INFO]: Starting minecraft server version 1.20.1
-                [12:34:56] [Server thread/INFO]: Loading properties
-                ...
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileListResponse'
         '404':
           $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/RateLimited'
-  /v1/raw/{id}/{filename}:
+  /1/raw/{id}/{filename}:
     get:
       tags: [Logs]
-      summary: Get a specific additional file of a log
-      description: |
-        Returns one additional file of a multi-file log as `text/plain`.
-        `filename` may contain sub-paths (URL-encoded). Path traversal is rejected.
-      operationId: getRawFileV1
+      summary: Read one file (deprecated prefix)
+      deprecated: true
+      operationId: getRawFile
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            pattern: '^[a-zA-Z0-9]{7}$'
-          example: "sAbCdEf"
-        - name: filename
-          in: path
-          required: true
-          schema:
-            type: string
-            pattern: '^[^/].*[^/]$'
-          example: "crash-reports/crash-01.txt"
+        - $ref: '#/components/parameters/LogId'
+        - $ref: '#/components/parameters/Filename'
       responses:
         '200':
           description: File content
@@ -721,73 +226,101 @@ paths:
                 type: string
         '404':
           $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/RateLimited'
+  /v1/raw/{id}/{filename}:
+    get:
+      tags: [Logs]
+      summary: Read one file
+      operationId: getRawFileV1
+      parameters:
+        - $ref: '#/components/parameters/LogId'
+        - $ref: '#/components/parameters/Filename'
+      responses:
+        '200':
+          description: File content
+          content:
+            text/plain:
+              schema:
+                type: string
+        '404':
+          $ref: '#/components/responses/NotFound'
   /1/insights/{id}:
     get:
       tags: [Analysis]
-      summary: Get structured insights for a log
-      description: |
-        Returns parsed entries, error counts, mod list, version info, etc.
-        
-        (Deprecated; use /v1/insights/{id} instead)
-      operationId: getInsights
+      summary: Analyse a single file or list files (deprecated prefix)
       deprecated: true
+      operationId: getInsights
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            pattern: '^[a-zA-Z0-9]{7}$'
-          example: "sAbCdEf"
+        - $ref: '#/components/parameters/LogId'
       responses:
         '200':
-          description: Insights data
+          description: Analysis JSON for single-file logs, or a file list for multi-file logs
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/InsightsResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/AnalysisResponse'
+                  - $ref: '#/components/schemas/FileListResponse'
         '404':
           $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/RateLimited'
   /v1/insights/{id}:
     get:
       tags: [Analysis]
-      summary: Get structured insights for a log
-      description: |
-        Returns parsed entries, error counts, mod list, version info, etc.
+      summary: Analyse a single file or list files
       operationId: getInsightsV1
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            pattern: '^[a-zA-Z0-9]{7}$'
-          example: "sAbCdEf"
+        - $ref: '#/components/parameters/LogId'
       responses:
         '200':
-          description: Insights data
+          description: Analysis JSON for single-file logs, or a file list for multi-file logs
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/InsightsResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/AnalysisResponse'
+                  - $ref: '#/components/schemas/FileListResponse'
         '404':
           $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/RateLimited'
+  /1/insights/{id}/{filename}:
+    get:
+      tags: [Analysis]
+      summary: Analyse one file (deprecated prefix)
+      deprecated: true
+      operationId: getInsightsFile
+      parameters:
+        - $ref: '#/components/parameters/LogId'
+        - $ref: '#/components/parameters/Filename'
+      responses:
+        '200':
+          description: Codex analysis JSON
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/insights/{id}/{filename}:
+    get:
+      tags: [Analysis]
+      summary: Analyse one file
+      operationId: getInsightsFileV1
+      parameters:
+        - $ref: '#/components/parameters/LogId'
+        - $ref: '#/components/parameters/Filename'
+      responses:
+        '200':
+          description: Codex analysis JSON
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /1/limits:
     get:
       tags: [Meta]
-      summary: Get upload limits
-      description: |
-        Returns configured max bytes, max lines, and storage TTL
-        
-        (Deprecated; use /v1/limits instead)
-      operationId: getLimits
+      summary: Get upload limits (deprecated prefix)
       deprecated: true
+      operationId: getLimits
       responses:
         '200':
           description: Limits
@@ -795,18 +328,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LimitsResponse'
-              example:
-                maxLength: 10485760
-                maxLines: 50000
-                storageTime: 604800
-        '429':
-          $ref: '#/components/responses/RateLimited'
   /v1/limits:
     get:
       tags: [Meta]
       summary: Get upload limits
-      description: |
-        Returns configured max bytes, max lines, and storage TTL
       operationId: getLimitsV1
       responses:
         '200':
@@ -815,62 +340,192 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LimitsResponse'
-              example:
-                maxLength: 10485760
-                maxLines: 50000
-                storageTime: 604800
-        '429':
-          $ref: '#/components/responses/RateLimited'
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    LogId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[a-zA-Z0-9]{7}$'
+      example: sAbCdEf
+    LogIdList:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[a-zA-Z0-9]{7}(,[a-zA-Z0-9]{7})*$'
+      example: sAbCdEf,fGhIjK
+    Filename:
+      name: filename
+      in: path
+      required: true
+      description: URL-encoded file name; may contain relative sub-paths.
+      schema:
+        type: string
+      example: crash-reports/crash-01.txt
+  requestBodies:
+    LogUpload:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [files]
+            properties:
+              files:
+                type: array
+                minItems: 1
+                maxItems: 200
+                items:
+                  $ref: '#/components/schemas/FileUpload'
+              metadata:
+                type: array
+                maxItems: 100
+                items:
+                  $ref: '#/components/schemas/MetadataEntry'
+              source:
+                type: string
+                maxLength: 64
+        application/x-www-form-urlencoded:
+          schema:
+            type: object
+            required: [files]
+            properties:
+              files:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FileUpload'
+              metadata:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MetadataEntry'
+              source:
+                type: string
+                maxLength: 64
   schemas:
-    IndexResponse:
+    FileUpload:
       type: object
-      required: [success, message, endpoints]
+      required: [name, content]
       properties:
-        success:
-          type: boolean
-          example: true
-        message:
+        name:
           type: string
-          example: "LogShare API"
-        endpoints:
-          type: array
-          items:
-            type: string
-    LogCreateResponse:
+          description: File name; may contain relative sub-paths. `.zip` is auto-expanded.
+        content:
+          type: string
+          description: File content or ZIP archive bytes.
+    FileEntry:
       type: object
-      required: [success, message, id, url, raw, token, deduplicated]
+      required: [name, size, lines, raw, insights]
       properties:
-        success:
-          type: boolean
-          example: true
-        message:
+        name:
           type: string
-          example: "Log submitted successfully"
-        id:
-          type: string
-          pattern: '^[a-zA-Z0-9]{7}$'
-          example: "sAbCdEf"
-        url:
-          type: string
-          format: uri
-          example: "https://logshare.cn/sAbCdEf"
+        size:
+          type: integer
+        lines:
+          type: integer
         raw:
           type: string
           format: uri
-          example: "https://api.logshare.cn/1/raw/sAbCdEf"
+        insights:
+          type: string
+          format: uri
+    FileListResponse:
+      type: object
+      required: [success, message, id, fileCount, requiresFileSelection, files]
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: Multiple files available; specify a filename.
+        id:
+          type: string
+        fileCount:
+          type: integer
+        requiresFileSelection:
+          type: boolean
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileEntry'
+    LogCreateResponse:
+      type: object
+      required: [success, message, id, url, filesUrl, token, deduplicated, fileCount, requiresFileSelection, files]
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        id:
+          type: string
+        url:
+          type: string
+          format: uri
+        filesUrl:
+          type: string
+          format: uri
         token:
           type: string
           pattern: '^[a-f0-9]{64}$'
-          description: Deletion token (SHA-256-sized hex string). Save it — it cannot be recovered.
-          example: "3f9c1a7d5e2b8046c1d9f3a70b5e28461c7a9d0e3f5b8124c6d7e9f0a1b2c3d4"
+          description: Deletion token. Save it; it cannot be recovered.
         deduplicated:
           type: boolean
-          description: |
-            `true` when the upload matched an existing content fingerprint. In that
-            case the returned `token` was never stored and cannot delete the log;
-            use the token from the original upload.
-          example: false
+          description: True when the upload matched an existing fingerprint. The returned token was not stored and cannot delete that log.
+        fileCount:
+          type: integer
+        requiresFileSelection:
+          type: boolean
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileEntry'
+    LogMetaResponse:
+      type: object
+      required: [success, message, id, fileCount, requiresFileSelection, size, lines, files, filesUrl]
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        id:
+          type: string
+        fileCount:
+          type: integer
+        requiresFileSelection:
+          type: boolean
+        size:
+          type: integer
+        lines:
+          type: integer
+        created:
+          type: integer
+          nullable: true
+        expires:
+          type: integer
+          nullable: true
+        metadata:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/MetadataEntry'
+        source:
+          type: string
+          nullable: true
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileEntry'
+        filesUrl:
+          type: string
+          format: uri
     LogDeleteResponse:
       type: object
       required: [success, message, deleted, failed, total, deletedCount, failedCount]
@@ -887,7 +542,6 @@ components:
           type: array
           items:
             type: object
-            required: [id, message, code]
             properties:
               id:
                 type: string
@@ -903,75 +557,36 @@ components:
           type: integer
     AnalysisResponse:
       type: object
-      description: Full Codex analysis result (varies by log type)
-      properties:
-        success:
-          type: boolean
-        message:
-          type: string
-        analysis:
-          type: object
-          additionalProperties: true
-    InsightsResponse:
-      type: object
-      required: [success, message, data]
-      properties:
-        success:
-          type: boolean
-        message:
-          type: string
-        data:
-          type: object
-          properties:
-            lineCount:
-              type: integer
-            errorCount:
-              type: integer
-            version:
-              type: string
-            modLoader:
-              type: string
-            mods:
-              type: array
-              items:
-                type: object
-            entries:
-              type: array
-              items:
-                type: object
+      description: Full Codex analysis result (shape varies by log type).
+      additionalProperties: true
     LimitsResponse:
       type: object
-      required: [maxLength, maxLines, storageTime]
+      required: [storageTime, maxFiles, maxTotalBytes, maxRequestBodyBytes]
       properties:
-        maxLength:
-          type: integer
-          description: Max upload bytes
-          example: 10485760
-        maxLines:
-          type: integer
-          example: 50000
         storageTime:
           type: integer
-          description: TTL in seconds
           example: 604800
+        maxFiles:
+          type: integer
+          example: 200
+        maxTotalBytes:
+          type: integer
+          example: 20971520
+        maxRequestBodyBytes:
+          type: integer
+          example: 33554432
     MetadataEntry:
       type: object
       required: [key, value]
       description: |
-        Structured log metadata. Clients are strongly encouraged to submit
-        analysis-relevant fields such as `version`, `loader`, `launcher`,
-        `modpack` and crash context. At most 100 entries are accepted; the
-        first entry wins when keys are duplicated.
+        Structured metadata is an important analysis input. Clients should submit
+        fields such as version, loader, launcher, modpack and crash context.
       properties:
         key:
           type: string
           minLength: 1
           maxLength: 64
-          description: Metadata key, trimmed; empty keys are rejected.
         value:
-          description: |
-            String values are stored as-is; numbers, booleans, arrays and
-            objects are JSON-serialized. Strings are limited to 1024 characters.
           oneOf:
             - type: string
             - type: number
@@ -984,11 +599,21 @@ components:
           type: string
           nullable: true
           maxLength: 128
-          description: Optional display label.
         visible:
           type: boolean
           default: true
-          description: When false, the entry is omitted from the public log metadata response.
+          description: When false, the entry is omitted from public metadata responses.
+    IndexResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        endpoints:
+          type: array
+          items:
+            type: string
     ErrorResponse:
       type: object
       required: [success, error, code]
@@ -1011,62 +636,27 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
-          example:
-            success: false
-            error: "Missing required field: content"
-            code: 400
     Unauthorized:
       description: Missing or invalid Authorization header
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
-          example:
-            success: false
-            error: "Missing token in Authorization header. Use: Bearer <token>"
-            code: 401
     Forbidden:
-      description: Token mismatch
+      description: Token mismatch or banned IP
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
-          example:
-            success: false
-            error: "Invalid token for log: sAbCdEf"
-            code: 403
     NotFound:
-      description: Log not found
+      description: Log or file not found
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
-          example:
-            success: false
-            error: "Log not found: sAbCdEf"
-            code: 404
-    RateLimited:
-      description: Rate limit exceeded
-      headers:
-        Retry-After:
-          schema:
-            type: integer
-          description: Seconds until reset
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorResponse'
-          example:
-            success: false
-            error: "Rate limit exceeded. Please try again later."
-            code: 429
     PayloadTooLarge:
-      description: Request body exceeds limit
+      description: Request body or total file size exceeds limit
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
-          example:
-            success: false
-            error: "Request body exceeds 10 MB limit"
-            code: 413

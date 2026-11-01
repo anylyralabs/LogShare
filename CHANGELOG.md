@@ -2,6 +2,16 @@
 
 ## 1.8.5 — 2026-11-01
 
+### 变更
+
+- **纯文件模型**：上传只接受 `files`，移除 `content` 正文、主文件与旧日志兼容；`logs` 表不再保存 `data`，所有内容由 `log_files` 承载。
+- **移除异步事件队列**：删除 EventQueue、Redis Streams 消费者、安全审核 handler 与反混淆 handler；上传时逐文件同步执行 SpinYarn 反混淆。
+- **移除应用层内容审核**：不再加载关键词/正则内容规则；内容防护由边缘 OpenLiteWaf 承担。
+- **按文件访问**：`GET /v1/log/{id}` 返回文件列表；单文件 `raw`/`insights` 自动选择，多文件返回 `200` + 文件列表；新增 `/v1/insights/{id}/{filename}`。
+- **移除 `POST /v1/analyse`**：分析只针对已存储文件的指定文件名执行。
+- **限额调整**：最多 200 个文件、展开后合计 20 MiB、请求体解压后 32 MiB；不限制单个文件大小或行数。
+- **部署要求**：单文件可能超过 16 MiB，MariaDB 需设置 `max_allowed_packet=64M`；旧 `logs.data` 结构需清空重建。
+
 ### 修复
 
 - **表单上传的 metadata/source 不再丢失**：`application/x-www-form-urlencoded` 现在与 JSON 共用结构化解析，`metadata`、`source`、`files` 都会正常进入落库流程。

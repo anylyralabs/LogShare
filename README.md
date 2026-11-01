@@ -2,7 +2,7 @@
 
 面向 Minecraft / Hytale 的服务端日志分享与解析平台。上传日志后返回 7 位短 ID、纯文本访问地址和删除凭证；服务同时使用 Aternos Codex 解析游戏版本、模组加载器与崩溃信息，并在扩展可用时通过 SpinYarn 还原 Fabric / Vanilla 的混淆栈。
 
-后端是 PHP 8.4+、Hyperf 3.2、Swoole 6.2 的常驻协程应用：日志正文写入 MariaDB（按天 RANGE 分区），Redis 承担读缓存与异步事件队列，OpenResty 上的 OpenLiteWaf / OpenLiteStats 子模块负责边缘防护与访问统计。
+后端是 PHP 8.4+、Hyperf 3.2、Swoole 6.2 的常驻协程应用：日志文件写入 MariaDB（按天 RANGE 分区），Redis 承担读缓存，OpenResty 上的 OpenLiteWaf / OpenLiteStats 子模块负责边缘防护与访问统计。
 
 ## 目录
 
@@ -14,7 +14,6 @@
 - [API](#api)
 - [处理流程](#处理流程)
 - [存储与过期](#存储与过期)
-- [事件队列](#事件队列)
 - [反混淆](#反混淆)
 - [隐私与安全](#隐私与安全)
 - [开发与测试](#开发与测试)
@@ -23,16 +22,16 @@
 
 ## 主要能力
 
-- **日志分享**：`POST /v1/log` 接收日志正文，返回短 ID；`GET /v1/raw/{id}` 以 `text/plain` 输出原文，`GET /v1/log/{id}` 输出大小、行数、来源、附件与可见元信息。
-- **多文件与压缩上传**：支持 JSON / 表单上传、`gzip` / `deflate` / `br` 请求体、ZIP 自动展开，以及同一 ID 下的多个附件。
-- **结构化解析**：使用 `aternos/codex-minecraft` 与 `aternos/codex-hytale` 识别日志类型、版本、加载器与崩溃原因；`GET /v1/insights/{id}` 返回分析 JSON。
+- **日志分享**：`POST /v1/log` 接收文件列表，返回短 ID、文件列表与删除凭证；`GET /v1/log/{id}` 输出文件列表、大小、行数、来源与可见元信息。
+- **多文件与压缩上传**：支持 JSON / 表单上传、`gzip` / `deflate` / `br` 请求体、ZIP 自动展开；文件数 ≤ 200，展开后合计 ≤ 20 MiB，不限制单个文件大小。
+- **按文件读取与分析**：多文件时直接访问 ID 返回文件列表；带文件名才读取指定文件或执行 Codex 分析。
+- **结构化解析**：使用 `aternos/codex-minecraft` 与 `aternos/codex-hytale` 识别日志类型、版本、加载器与崩溃原因；`GET /v1/insights/{id}/{filename}` 返回分析 JSON。
 - **删除凭证**：上传时生成明文 token，仅在响应中返回一次；服务端只保存 `sha256:<hex>`，`DELETE /v1/log/{id}` 使用 `Authorization: Bearer <token>` 校验。
-- **内容去重**：正文、来源与按名称排序的附件计算 `xxh128` 指纹，重复上传直接复用已有 ID。
+- **内容去重**：按来源与按名称排序的文件集合计算 `xxh128` 指纹，重复上传直接复用已有 ID。
 - **隐私过滤**：入库前统一脱敏 IPv4 / IPv6、UUID、XUID、会话 token、客户端 ID、访问 token、坐标与用户名路径。
-- **可选反混淆**：识别 Fabric / Vanilla 日志后调用 SpinYarn PHP 扩展，将混淆类名、方法名、字段名替换为可读名称；扩展缺失或失败时原样透传。
-- **异步流水线**：上传立即返回，安全审核与反混淆通过 Redis Streams 在后台执行；Redis 不可用时降级为同步执行。
+- **上传期反混淆**：逐文件识别 Fabric / Vanilla 日志并调用 SpinYarn；扩展缺失或失败时原样透传。全文分析只在显式请求分析接口时执行。
 - **自动过期**：日志按 `created` 做天级 RANGE 分区，过期数据通过 `DROP PARTITION` 回收，磁盘空间真正归还操作系统。
-- **边缘防护**：OpenResty 侧提供 CC 限流、攻击特征拦截、封禁管理与访问统计；应用层另有 IP 黑名单和内容审核。
+- **边缘防护**：OpenResty 侧提供 CC 限流、攻击特征拦截、封禁管理与访问统计；应用层保留 IP 黑名单；应用层内容审核已移除。
 
 ## 技术栈
 
@@ -40,7 +39,7 @@
 | --- | --- |
 | 运行时 | PHP >= 8.4（生产镜像使用 PHP 8.5）、Hyperf 3.2、Swoole 6.2 |
 | 数据库 | MariaDB 11.8，`logs` / `log_files` / `log_metadata` 按天分区 |
-| 缓存与队列 | Redis 7.4（可选），读缓存与 Redis Streams 事件队列 |
+| 缓存 | Redis 7.4（可选），只用于读缓存 |
 | 日志解析 | `aternos/codex-minecraft` ^5.1、`aternos/codex-hytale` ^2.0 |
 | 反混淆 | SpinYarn PHP 扩展（可选，Docker 镜像内编译） |
 | 边缘层 | OpenResty 1.27 + OpenLiteWaf + OpenLiteStats（git submodule） |
@@ -58,17 +57,15 @@ LogShare/
 │   ├── Controller/             # HTTP 控制器（注解路由）
 │   ├── Storage/                # StorageInterface 与 MariaDbStorage
 │   ├── Cache/                  # CacheInterface 与 RedisCache
-│   ├── Client/                 # RedisClient、RedisStreams、SpinYarnClient
-│   ├── Queue/                  # EventQueue、QueueEvent、死信与固定流水线处理器
-│   ├── Process/                # EventQueueConsumer 常驻消费者
-│   ├── Filter/                 # 上传前置脱敏与大小/行数限制
+│   ├── Client/                 # RedisClient、SpinYarnClient
+│   ├── Filter/                 # 上传前置脱敏过滤器
 │   ├── System/                 # SecurityService、LogPartitionManager
 │   ├── Data/                   # Token、MetadataEntry
 │   ├── Parser/                 # RequestParser（压缩请求体）
 │   ├── Exception/Handler/      # ApiError 与兜底异常渲染
-│   ├── Log.php                 # 日志领域模型、Codex 集成、缓存读写
-│   ├── ContentParser.php       # 请求正文解码与字段解析
-│   ├── UploadParser.php        # 附件校验、ZIP 展开、重名处理
+│   ├── Log.php                 # 日志领域模型、逐文件反混淆、按需分析、缓存读写
+│   ├── ContentParser.php       # 上传请求解码与 files/metadata/source 解析
+│   ├── UploadParser.php        # 文件校验、ZIP 展开、重名处理
 │   ├── Id.php / Config.php     # ID 编解码与配置访问
 │   └── Version.php             # 版本号单一来源
 ├── docker/
@@ -92,8 +89,8 @@ LogShare/
 ### 环境要求
 
 - PHP >= 8.4：`ext-json`、`ext-zlib`、`ext-mbstring`、`ext-curl`、`ext-openssl`、`ext-zip`。
-- 运行服务还需要 `ext-swoole`（>= 6.2）、`ext-pdo_mysql`；`ext-redis` 用于缓存与队列，缺失时自动降级；`ext-brotli` 用于 Brotli 请求体与响应压缩，缺失时返回 501。
-- MariaDB 11.x。表结构依赖 RANGE 分区与 Event Scheduler。
+- 运行服务还需要 `ext-swoole`（>= 6.2）、`ext-pdo_mysql`；`ext-redis` 用于读缓存，缺失时自动降级；`ext-brotli` 用于 Brotli 请求体与响应压缩，缺失时返回 501。
+- MariaDB 11.x。表结构依赖 RANGE 分区与 Event Scheduler；允许 20 MiB 单文件写入，需设置 `max_allowed_packet=64M`。
 - Redis 7.x 可选。即使不启用缓存，`Config::validate()` 仍要求 `cache.redis.host` 与端口非空。
 - Composer 2；容器方式需要 Docker 与 Compose 插件。
 
@@ -112,13 +109,15 @@ mariadb -uroot -p logshare < docker/mariadb-init.sql
 php bin/hyperf.php start
 ```
 
+本地 MariaDB 若保持默认 16 MiB `max_allowed_packet`，超过 16 MiB 的文件会写入失败；请在 `[mysqld]` 中设置 `max_allowed_packet=64M`，或执行 `SET GLOBAL max_allowed_packet=67108864`。
+
 服务默认监听 `0.0.0.0:9501`。启动后可访问：
 
 ```bash
 curl http://127.0.0.1:9501/v1/limits
 ```
 
-本地没有 Redis 时，缓存读取会失败并回源 MariaDB，事件队列改为同步执行；Redis 扩展也缺失时 `RedisClient::getRedis()` 返回 `null`，不会阻断上传。`Config.inc.php` 不存在时会回退到 `Config.inc.example.php` 的默认值，但生产环境应显式提供完整配置。
+本地没有 Redis 时，缓存读取会失败并回源 MariaDB；Redis 扩展也缺失时 `RedisClient::getRedis()` 返回 `null`，不会阻断上传。`Config.inc.php` 不存在时会回退到 `Config.inc.example.php` 的默认值，但生产环境应显式提供完整配置。
 
 ### Docker Compose
 
@@ -141,6 +140,8 @@ cp .env.example .env
 ```bash
 docker compose --env-file .env -f docker/compose.yaml up -d
 ```
+
+Compose 已为 MariaDB 传入 `--max-allowed-packet=64M`；自建数据库需同步设置。
 
 | 服务 | 说明 |
 | --- | --- |
@@ -184,25 +185,22 @@ Config::GetPath('urls.apiBaseUrl'); // 嵌套项
 
 | 配置段 | 作用 | 主要键 |
 | --- | --- | --- |
-| `storage` | 存储后端、保留时长与上传限制 | `storages`、`storageId`、`storageTime`、`maxLength`、`maxLines`、`uploadFiles` |
+| `storage` | 存储后端、保留时长与上传限制 | `storages`、`storageId`、`storageTime`、`uploadFiles` |
 | `cache` | Redis 缓存 | `cacheId`、`enabled`、`redis`、`ttl`、`maxSize` |
 | `id` | 短 ID 字符集与长度 | `characters`、`length` |
 | `filter` | 上传前置过滤器链 | `pre` |
 | `urls` | 对外展示地址 | `baseUrl`、`apiBaseUrl` |
 | `rateLimit` | Redis 限流参数 | `enabled`、`trustedProxies`、`default`、`routes` |
-| `security` | 内容审核、IP 封禁、可信代理 | `enabled`、`trustedProxies`、`contentRules`、`ipBans` |
+| `security` | IP 封禁与可信代理 | `enabled`、`trustedProxies`、`ipBans` |
 | `legal` | 滥用联系与合规链接 | `abuseEmail`、`imprint`、`privacy` |
 | `spinyarn` | 反混淆扩展 | `mappings_dir`、`redis_enabled`、`cache_*` |
-| `eventQueue` | 异步事件队列 | `enabled`、`stream`、`group`、`maxAttempts`、`asyncDeobfuscate`、`asyncSecurityAudit` |
 
 关键默认值：
 
 - `storage.storageTime`：`604800` 秒（7 天）。
-- `storage.maxLength`：10 MiB；`storage.maxLines`：50,000 行。
-- `storage.uploadFiles.maxFiles`：200；`maxTotalBytes`：12 MiB。
-- `cache.ttl`：1,800 秒；`cache.maxSize`：5 MiB（主内容与附件合计）。
+- `storage.uploadFiles.maxFiles`：200；`maxTotalBytes`：20 MiB；`maxRequestBodyBytes`：32 MiB。
+- `cache.ttl`：1,800 秒；`cache.maxSize`：5 MiB（全部文件合计）。
 - `id.length`：6；对外 ID 为 1 位存储标识编码 + 6 位随机字符，共 7 位。
-- `eventQueue.maxAttempts`：3。
 
 `filter.pre` 是类名数组，顺序即执行顺序；新增过滤器必须继承 `App\Filter\Filter`，否则配置校验失败。
 
@@ -217,12 +215,9 @@ Config::GetPath('urls.apiBaseUrl'); // 嵌套项
 | `DB_CHARSET` / `DB_COLLATION` / `DB_PREFIX` | 数据库字符集、排序规则与表前缀 |
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_TIMEOUT` / `REDIS_PASSWORD` | 覆盖 `cache.redis` |
 | `STORAGE_TIME` | 覆盖 `storage.storageTime`（秒） |
-| `SECURITY_KEY` / `SECURITY_ENCRYPTION_KEY` | 内容规则密文密钥；未设置时使用 `runtime/.security_secret` |
 | `WAF_SNAPSHOT_PATH` | 指定 OpenLiteWaf 快照文件路径 |
 | `OPENLITEWAF_ADMIN_TOKEN` | WAF 运维端点令牌，Compose 中透传给 nginx |
 | `MARIADB_PASSWORD` / `MARIADB_ROOT_PASSWORD` / `REDIS_PASSWORD` | Compose 必填密码变量 |
-
-安全密钥的优先级为：`SECURITY_KEY` → `SECURITY_ENCRYPTION_KEY` → `security.encryptionKey` → `runtime/.security_secret`。密钥文件由进程自动生成，权限收紧为 `0600`。
 
 ### 配置校验
 
@@ -233,7 +228,6 @@ Config::GetPath('urls.apiBaseUrl'); // 嵌套项
 - `filter.pre` 中每个类存在且继承 `App\Filter\Filter`。
 - `storage.storages.*.class` 存在且实现 `App\Storage\StorageInterface`。
 - `cache.cacheId` 存在且实现 `App\Cache\CacheInterface`。
-- `security.contentRules.patterns` 中的正则（含密文解密后）可编译。
 - `rateLimit.enabled` 为真时，`trustedProxies` 与 `default` 结构合法。
 
 ## API
@@ -241,9 +235,9 @@ Config::GetPath('urls.apiBaseUrl'); // 嵌套项
 ### 约定
 
 - 默认地址示例为 `https://api.logshare.cn`；路径前缀为 `/{version}`，`v1` 为推荐写法，`1` 为兼容旧客户端的别名。
-- 上传支持 `application/json` 与 `application/x-www-form-urlencoded`（表单模式只读取 `content` 字段）。
+- 上传支持 `application/json` 与 `application/x-www-form-urlencoded`，字段为 `files`、`metadata` 与 `source`。
 - 请求体支持 `Content-Encoding: gzip`、`deflate`、`br`，多层编码按逆序解压，最多 5 层。
-- 成功响应统一为 `success: true` 加业务字段；失败响应为 `success: false`、`error`、`code`。`/v1/limits` 与 `/v1/insights/{id}` 例外，直接返回原始 JSON。
+- 成功响应统一为 `success: true` 加业务字段；失败响应为 `success: false`、`error`、`code`。`/v1/limits` 与单文件 `/v1/insights/{id}` 例外，直接返回原始 JSON。
 - 读接口与上传接口不要求鉴权；删除接口要求 Bearer token。
 - CORS 允许所有来源（`Access-Control-Allow-Origin: *`），并缓存预检结果 24 小时。
 
@@ -251,14 +245,14 @@ Config::GetPath('urls.apiBaseUrl'); // 嵌套项
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `POST` | `/v1/log` | 上传日志，返回 ID、访问地址与删除凭证 |
+| `POST` | `/v1/log` | 上传文件列表，返回 ID、文件列表与删除凭证 |
 | `DELETE` | `/v1/log/{id}` | 按 Bearer token 删除一个或多个日志 |
-| `GET` | `/v1/log/{id}` | 查询日志元信息、附件列表与公开元数据 |
-| `GET` | `/v1/raw/{id}` | 读取日志正文，`text/plain` |
-| `GET` | `/v1/raw/{id}/{filename}` | 读取指定附件；文件名按 URL 解码后精确匹配 |
-| `GET` | `/v1/insights/{id}` | 返回 Codex 分析 JSON |
-| `POST` | `/v1/analyse` | 对请求中的日志做即时解析，不落库 |
-| `GET` | `/v1/limits` | 返回保留时长、大小与行数限制 |
+| `GET` | `/v1/log/{id}` | 查询日志元信息与文件列表 |
+| `GET` | `/v1/raw/{id}` | 单文件返回内容；多文件返回 `200` + 文件列表 |
+| `GET` | `/v1/raw/{id}/{filename}` | 读取指定文件；文件名按 URL 解码后精确匹配 |
+| `GET` | `/v1/insights/{id}` | 单文件返回 Codex 分析；多文件返回 `200` + 文件列表 |
+| `GET` | `/v1/insights/{id}/{filename}` | 对指定文件执行 Codex 分析 |
+| `GET` | `/v1/limits` | 返回保留时长与文件上传限制 |
 | `GET` | `/` | 返回端点清单 |
 
 ### 上传日志
@@ -267,13 +261,13 @@ Config::GetPath('urls.apiBaseUrl'); // 嵌套项
 curl -X POST https://api.logshare.cn/v1/log \
   -H 'Content-Type: application/json' \
   --data '{
-    "content": "[12:34:56] [Server thread/INFO]: Starting minecraft server version 1.21.1\n...",
+    "files": [
+      {"name": "latest.log", "content": "..."},
+      {"name": "crash-2026-01-01.txt", "content": "..."}
+    ],
     "source": "HMCL/3.5.9",
     "metadata": [
       {"key": "version", "value": "1.21.1", "label": "Minecraft 版本"}
-    ],
-    "files": [
-      {"name": "crash-2026-01-01.txt", "content": "..."}
     ]
   }'
 ```
@@ -282,20 +276,18 @@ curl -X POST https://api.logshare.cn/v1/log \
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `content` | string | 日志正文。存在非空 `files` 时可省略，此时以 `files[0]` 作为主内容；否则必填且不能为空 |
-| `metadata` | array | 分析核心输入。最多 100 条；每项支持 `key`（trim 后 1–64 字符）、`value`（字符串最长 1024 字符，其他类型 JSON 序列化）、`label`（最长 128 字符）、`visible`（默认 true）；重复 `key` 保留首条；JSON 与 urlencoded 均支持 |
+| `files` | array | 必填。每项为 `{"name": "...", "content": "..."}`；文件数 ≤ 200，展开后合计 ≤ 20 MiB |
+| `metadata` | array | 分析核心输入。最多 100 条；每项支持 `key`（trim 后 1–64 字符）、`value`（字符串最长 1024 字符，其他类型 JSON 序列化）、`label`（最长 128 字符）、`visible`（默认 true）；重复 `key` 保留首条 |
 | `source` | string | 来源标识，按 UTF-8 边界截断到 64 字符；省略时尝试从 User-Agent 解析 `名称/版本`，否则记为 `未指定` |
-| `files` | array | 附件数组，每项为 `{"name": "...", "content": "..."}`，也接受 `data` 字段 |
 
 限制与处理：
 
-- 请求体上限为 `storage.maxLength` 的 2 倍；解码后的正文超过 10 MiB 或 50,000 行会被拒绝。
-- 最多 200 个文件，展开后合计不超过 12 MiB。`.zip` 会逐条流式解压，并检查路径穿越、控制字符、超长文件名与解压膨胀。
-- 同名附件会重命名为 `名字 (2).扩展名`、`名字 (3).扩展名`，避免与数据库主键冲突。
+- 请求体解压后上限 32 MiB；文件数 ≤ 200，展开后合计 ≤ 20 MiB；不限制单个文件大小或行数。
+- `.zip` 会逐条流式解压，并检查路径穿越、控制字符、超长文件名与解压膨胀。
+- 同名文件会重命名为 `名字 (2).扩展名`、`名字 (3).扩展名`，避免与数据库主键冲突。
+- 每个文件独立经过 `filter.pre` 过滤链并尝试 SpinYarn 反混淆；不会执行全文 Codex 分析。
 - **metadata 很重要**：请尽量提交 `version`、`loader`、`launcher`、`modpack` 与崩溃上下文；`GET /v1/log/{id}` 会展示（`visible=false` 除外），分析与排查会依赖这些字段。
-- 正文与每个附件都会经过 `filter.pre` 过滤链；非法 UTF-8 会被替换为 `U+FFFD`。
-- 若正文与文件内容一致，第一份附件会复用主内容，避免重复过滤。
-- 来源、正文与按名称排序的附件共同计算 `xxh128` 指纹；命中已有指纹时直接返回旧 ID，并带 `deduplicated: true`。去重不会写入新的删除凭证，删除权限仍属于首次上传者。
+- 来源与按名称排序的文件集合共同计算 `xxh128` 指纹；命中已有指纹时直接返回旧 ID，并带 `deduplicated: true`。去重不会写入新的删除凭证。
 
 成功响应：
 
@@ -305,13 +297,22 @@ curl -X POST https://api.logshare.cn/v1/log \
   "message": "Log submitted successfully",
   "id": "s4Kd9xQ",
   "url": "https://logshare.cn/s4Kd9xQ",
-  "raw": "https://api.logshare.cn/v1/raw/s4Kd9xQ",
+  "filesUrl": "https://api.logshare.cn/v1/log/s4Kd9xQ",
   "token": "64 位十六进制字符串",
-  "deduplicated": false
+  "deduplicated": false,
+  "fileCount": 2,
+  "requiresFileSelection": true,
+  "files": [
+    {
+      "name": "latest.log",
+      "size": 2048,
+      "lines": 40,
+      "raw": "https://api.logshare.cn/v1/raw/s4Kd9xQ/latest.log",
+      "insights": "https://api.logshare.cn/v1/insights/s4Kd9xQ/latest.log"
+    }
+  ]
 }
 ```
-
-`token` 只在此次响应中出现，服务端不保存明文。请提示用户立即保存。
 
 ### 删除日志
 
@@ -320,23 +321,9 @@ curl -X DELETE https://api.logshare.cn/v1/log/s4Kd9xQ \
   -H 'Authorization: Bearer <token>'
 ```
 
-`{id}` 支持逗号分隔的多个 ID，例如 `/v1/log/s4Kd9xQ,sAb12Cd`。逐个校验存在性与 token 后返回：
+`{id}` 支持逗号分隔的多个 ID。逐个校验存在性与 token 后返回删除结果；缺少 Bearer token 时返回 401。
 
-```json
-{
-  "success": true,
-  "message": "Log deletion completed",
-  "deleted": ["s4Kd9xQ"],
-  "failed": [],
-  "total": 1,
-  "deletedCount": 1,
-  "failedCount": 0
-}
-```
-
-所有 ID 都删除失败时返回 400，`errors` 中带有每个 ID 的原因（400 格式错误 / 403 token 不匹配 / 404 不存在 / 500 删除失败）。缺少 `Authorization: Bearer` 时返回 401。
-
-### 查询元信息
+### 查询元信息与文件列表
 
 ```bash
 curl https://api.logshare.cn/v1/log/s4Kd9xQ
@@ -347,43 +334,38 @@ curl https://api.logshare.cn/v1/log/s4Kd9xQ
 | 字段 | 说明 |
 | --- | --- |
 | `id` | 7 位日志 ID |
-| `size` | 正文字节数 |
-| `lines` | 正文行数 |
-| `created` | 创建或最近续期时间（Unix 秒） |
-| `expires` | 预计过期时间（Unix 秒） |
+| `fileCount` | 文件数量 |
+| `requiresFileSelection` | 是否需要在多个文件中选择 |
+| `size` | 全部文件总字节数 |
+| `lines` | 全部文件总行数 |
+| `created` / `expires` | 创建/最近续期时间与预计过期时间 |
 | `metadata` | 公开元数据数组，自动过滤 `visible=false` 的条目 |
 | `source` | 来源标识 |
-| `files` | 附件列表 `[{name, size}]` |
-| `raw` | 正文地址 |
+| `files` | 文件列表 `[{name, size, lines, raw, insights}]` |
+| `filesUrl` | 文件列表地址 |
 
-元信息接口不会续期；读取正文或分析结果才会延长保留时间。
+元信息接口不会续期；读取文件或分析结果才会延长保留时间。
 
-### 读取正文与附件
+### 读取文件
 
 ```bash
-curl https://api.logshare.cn/v1/raw/s4Kd9xQ
-curl https://api.logshare.cn/v1/raw/s4Kd9xQ/crash-2026-01-01.txt
+curl https://api.logshare.cn/v1/raw/s4Kd9xQ/latest.log
 ```
 
-返回 `text/plain; charset=utf-8`。读取成功会调用 `renew()`，把 `created` 推进到当前时间，从而顺延存储过期时间与 Redis 缓存 TTL。附件名可以是包含 `/` 的相对路径；服务端仅按数据库中的 `name` 精确匹配，不做文件系统访问。
+- 单文件日志可省略文件名，`GET /v1/raw/{id}` 直接返回 `text/plain`。
+- 多文件日志省略文件名时返回 `200` + 文件列表，不会擅自选择文件。
+- 读取成功会调用 `renew()`，顺延存储过期时间与 Redis 缓存 TTL。文件名可以是包含 `/` 的相对路径；服务端仅按数据库中的 `name` 精确匹配。
 
 ### 分析结果
 
 ```bash
-curl https://api.logshare.cn/v1/insights/s4Kd9xQ
+curl https://api.logshare.cn/v1/insights/s4Kd9xQ/latest.log
 ```
 
-使用 Aternos Codex 对全文执行 `detect → parse → analyse`，直接返回分析 JSON（不包 `success` 外壳，且不包含原始条目）。分析结果在进程内按内容 MD5 做 LRU 缓存：最多 32 条、单条 4 MiB、总计 32 MiB。首次访问大日志可能需要数秒；读取同样会续期。
+使用 Aternos Codex 对指定文件执行 `detect → parse → analyse`，直接返回分析 JSON（不包 `success` 外壳，且不包含原始条目）。分析结果在进程内按内容 MD5 做 LRU 缓存：最多 32 条、单条 4 MiB、总计 32 MiB。
 
-### 在线分析
-
-```bash
-curl -X POST https://api.logshare.cn/v1/analyse \
-  -H 'Content-Type: application/json' \
-  --data '{"content": "[12:34:56] [Server thread/INFO]: Starting minecraft server version 1.21.1\n..."}'
-```
-
-对请求中的 `content` 执行过滤、反混淆与 Codex 分析，但不写入存储、不生成 ID。也可以使用表单字段 `content`。该接口始终同步执行内容安全校验。
+- 单文件日志可省略文件名。
+- 多文件日志省略文件名时返回 `200` + 文件列表，客户端选择后再请求。
 
 ### 限额
 
@@ -394,8 +376,9 @@ curl https://api.logshare.cn/v1/limits
 ```json
 {
   "storageTime": 604800,
-  "maxLength": 10485760,
-  "maxLines": 50000
+  "maxFiles": 200,
+  "maxTotalBytes": 20971520,
+  "maxRequestBodyBytes": 33554432
 }
 ```
 
@@ -403,10 +386,10 @@ curl https://api.logshare.cn/v1/limits
 
 | 状态码 | 含义 |
 | --- | --- |
-| `400` | 字段缺失、内容为空、格式错误、超过大小/行数限制、内容审核拒绝、删除全部失败 |
+| `400` | 字段缺失、格式错误、文件总量超限、删除全部失败 |
 | `401` | 删除请求缺少 Bearer token |
 | `403` | token 不匹配，或客户端 IP 已被封禁 |
-| `404` | 日志或附件不存在 |
+| `404` | 日志或文件不存在 |
 | `413` | 文件数量或总大小超过限制，或请求体超限 |
 | `415` | 不支持的 `Content-Encoding` |
 | `429` | 触发限流 |
@@ -420,27 +403,19 @@ curl https://api.logshare.cn/v1/limits
 
 1. `CorsMiddleware` 处理跨域；`OPTIONS` 请求直接返回。
 2. `ContentParser` 读取请求体，先检查原始大小，再按 `Content-Encoding` 逆序解压，最后解析 JSON 或表单。
-3. 校验正文存在，检查客户端 IP 是否在配置、Redis、本地封禁文件或 WAF 快照中。
-4. 若 `eventQueue.asyncSecurityAudit` 为 `false`，在上传路径同步执行关键词与正则审核；为 `true` 时交给后台队列。
-5. `Log::put()` 依次执行前置过滤链、仅头部（64 KiB）的 Codex 解析（提取版本与加载器，不覆盖客户端显式提供的同名元数据）、token 哈希与附件过滤。
+3. 校验 `files` 非空，检查客户端 IP 是否在配置、Redis、本地封禁文件或 WAF 快照中。
+4. `Log::put()` 对每个文件执行前置过滤链，识别 Minecraft 日志并尝试 SpinYarn 反混淆；反混淆失败按原文保留。
+5. 反混淆阶段识别出的第一份 Minecraft 日志可补全 `version` / `loader` 元数据；客户端显式提交的同名键优先。
 6. `MariaDbStorage::Put()` 计算 `xxh128` 指纹，并在事务中写入 `logs`、`log_metadata`、`log_files`；主存储成功后按大小决定是否写 Redis 缓存。去重命中时不写缓存。
-7. 非去重请求派发 `log.uploaded` 事件，然后立即返回 200。事件投递失败只记录错误日志，不影响上传结果。
-
-### 异步流水线
-
-`log.uploaded` 固定执行两个处理器：
-
-1. `SecurityAuditHandler`：重新读取正文与附件并做内容审核。命中违规时停止后续处理器、物理删除日志与缓存；若来源 IP 不是私网或回环地址，则封禁 24 小时。
-2. `DeobfuscateHandler`：识别日志类型与版本，调用 SpinYarn 反混淆并回写存储与缓存。日志不存在（例如已被审核删除）时安全退出。
-
-`asyncSecurityAudit` 与 `asyncDeobfuscate` 可分别关闭对应处理器。关闭 `asyncSecurityAudit` 时，上传路径改为同步审核；关闭 `asyncDeobfuscate` 时，上传不会执行反混淆。
+7. 返回 200，响应包含 ID、文件列表、`filesUrl`、token 与 `deduplicated`。全文 Codex 分析不会在这里执行。
 
 ### 读取
 
 1. 解析 7 位 ID，还原存储标识与 6 位原始 ID。
 2. Redis 缓存键为 `log:<id>`；存在删除墓碑 `log:<id>:deleted` 时跳过缓存，避免已删日志在 TTL 内复活。
-3. 缓存未命中则从 `MariaDbStorage::Get()` 读取正文、token 哈希、元数据与附件，并在总大小不超过 `cache.maxSize` 时回填缓存。
-4. 读取正文或分析结果成功后调用 `Renew()`：父表 `created` 与两张子表的 `created` 同步更新，保证父子行落在同一分区；Redis 缓存 TTL 同步续期。元信息接口不续期。
+3. 缓存未命中则从 `MariaDbStorage::Get()` 读取 token 哈希、元数据与文件集合，并在总大小不超过 `cache.maxSize` 时回填缓存。
+4. 单文件直接返回内容；多文件返回 `200` + 文件列表。带文件名时按数据库 `name` 精确匹配。
+5. 读取文件或分析结果成功后调用 `Renew()`：父表 `created` 与两张子表的 `created` 同步更新，保证父子行落在同一分区；Redis 缓存 TTL 同步续期。元信息接口不续期。
 
 ## 存储与过期
 
@@ -448,17 +423,17 @@ curl https://api.logshare.cn/v1/limits
 
 | 表 | 关键列 | 主键 |
 | --- | --- | --- |
-| `logs` | `id CHAR(6)`、`data LONGTEXT`、`token VARCHAR(80)`、`source VARCHAR(64)`、`created INT UNSIGNED`、`fingerprint CHAR(32)` | `(id, created)` |
+| `logs` | `id CHAR(6)`、`token VARCHAR(80)`、`source VARCHAR(64)`、`created INT UNSIGNED`、`fingerprint CHAR(32)` | `(id, created)` |
 | `log_files` | `log_id CHAR(6)`、`name VARCHAR(512)`、`data LONGTEXT`、`size INT UNSIGNED`、`created` | `(log_id, name, created)` |
 | `log_metadata` | `log_id CHAR(6)`、`key VARCHAR(64)`、`value TEXT`、`label VARCHAR(128)`、`visible TINYINT(1)`、`created` | `(log_id, key, created)` |
 
-三张表均使用 `PARTITION BY RANGE (created)`，并保留 `p_future VALUES LESS THAN (MAXVALUE)` 兜底分区。分区表不支持外键，级联删除由 `MariaDbStorage::Delete()` 显式完成，顺序为元数据、附件、父表。
+三张表均使用 `PARTITION BY RANGE (created)`，并保留 `p_future VALUES LESS THAN (MAXVALUE)` 兜底分区。分区表不支持外键，级联删除由 `MariaDbStorage::Delete()` 显式完成，顺序为元数据、文件、父表。
 
 ### ID 与去重
 
 - `logs.id` 存 6 位原始 ID；对外 ID 为 7 位，首位由存储标识与随机字符共同编码，后 6 位是随机字符。当前只有 MariaDB 一个存储后端，`storageId` 为 `s`。
 - ID 生成后先做存在性预检，再在事务中插入；并发冲突时重新生成，最多重试 5 轮。
-- 指纹使用非加密哈希 `xxh128`，计算范围是 `source`、正文与按名称排序的附件；写入 `fingerprint` 列并建立索引。
+- 指纹使用非加密哈希 `xxh128`，计算范围是 `source` 与按名称排序的文件集合；写入 `fingerprint` 列并建立索引。
 - 去重命中时返回最新的同指纹记录，保证剩余 TTL 最长。旧库缺少 `fingerprint` 列时查询失败会降级为不去重，不阻断上传。
 - 删除凭证为 64 位十六进制随机串；库中存 `sha256:<hex>`（71 字符），比较使用 `hash_equals()`。旧记录的无前缀裸哈希在验证成功后惰性补前缀。
 
@@ -477,36 +452,7 @@ docker compose --env-file .env -f docker/compose.yaml restart mariadb-events
 ### 结构升级
 
 - `php scripts/widen_token_column.php`：把 `logs.token` 扩到 `VARCHAR(80)`，幂等，只执行 `ALTER TABLE`，适合已有部署。
-- `php scripts/migrate_partitioned_storage.php --yes`：把旧的非分区结构重建为分区结构，会 `DROP` 三张表，现有日志全部丢失。执行前必须确认已备份或数据可丢弃。
-
-## 事件队列
-
-固定配置位于 `eventQueue`：
-
-| 键 | 默认值 | 说明 |
-| --- | --- | --- |
-| `enabled` | `true` | 关闭后所有事件同步执行 |
-| `stream` | `events:log:stream` | 主事件流 |
-| `group` | `log-event-workers` | 消费组 |
-| `maxAttempts` | `3` | 单条事件最大尝试次数（含首次） |
-| `asyncSecurityAudit` | `true` | 是否异步执行内容审核 |
-| `asyncDeobfuscate` | `true` | 是否异步执行反混淆 |
-
-消费者进程名为 `event-queue-consumer`，仅在加载 `ext-redis` 且队列启用时启动：
-
-- 一个协程执行 `XREADGROUP` 拉取新消息，另一个协程每 30 秒用 `XAUTOCLAIM` 回收空闲超过 5 分钟的 pending 条目。
-- 成功即 `XACK` + `XDEL`，并删除 `events:attempts:<streamId>`。
-- 失败保留 pending，等待下一轮 reclaim；尝试次数记录在 `events:attempts:<streamId>`（7 天 TTL）。
-- 达到上限后写入死信流 `events:log:dead`（约保留最近 2000 条），写死信失败则保留 pending，不静默丢事件。
-- 每处理 1000 条且无在途任务后优雅退出，由 Swoole manager 拉起，以释放 RSS。
-
-Redis 不可用或队列关闭时，`EventQueue::dispatch()` 直接同步执行同一流水线，避免把事件交给不可持久化的协程。常用排查命令：
-
-```bash
-redis-cli XLEN events:log:stream
-redis-cli XINFO GROUPS events:log:stream
-redis-cli XRANGE events:log:dead - + COUNT 10
-```
+- `php scripts/migrate_partitioned_storage.php --yes`：把旧结构重建为文件模型的分区结构，会 `DROP` 三张表，现有日志全部丢失。本版本不兼容旧 `logs.data` 正文，升级前必须清空旧数据。
 
 ## 反混淆
 
@@ -531,7 +477,7 @@ python3 scripts/download_vanilla_mappings.py  # Mojang 官方映射，写入 map
 - 扩展未加载、版本非法、映射类型非法、初始化失败或反混淆返回异常时，均返回 `null`，调用方保留原文。
 - 初始化失败后，在没有可用旧句柄的情况下 60 秒内不再重试；成功句柄跨请求复用，`mappings_dir`、Redis URL 或缓存水位变化时重建，新句柄成功才替换旧句柄。
 - 只有 `spinyarn_init` 接受第 5 个参数时才传 Redis URL；旧版 4 参扩展自动退回按需解析（无缓存），避免 `ArgumentCountError` 导致进程生命周期内永久失效。
-- 反混淆结果会写回 MariaDB 与 Redis，后续读取直接得到可读文本。
+- 反混淆在入库前完成，MariaDB 与 Redis 中保存的就是可读文本。
 
 ## 隐私与安全
 
@@ -542,9 +488,7 @@ python3 scripts/download_vanilla_mappings.py  # Mojang 官方映射，写入 map
 | 过滤器 | 作用 |
 | --- | --- |
 | `EncodingFilter` | 非法 UTF-8 字节替换为 `U+FFFD` |
-| `TrimFilter` | 去除正文首尾空白 |
-| `LimitBytesFilter` | 超过 `storage.maxLength` 时以 400 拒绝 |
-| `LimitLinesFilter` | 超过 `storage.maxLines` 时以 400 拒绝 |
+| `TrimFilter` | 去除文件首尾空白 |
 | `IPv4Filter` | IPv4 地址替换为 `**.**.**.**`，保留回环、`0.0.0.0`、`1.1.1.1` / `1.0.0.1` 与 `8.8.8.8` / `8.8.4.4` |
 | `IPv6Filter` / `IPv6ShortFilter` | 完整与缩写 IPv6 地址打码，保留 `::1` 等回环形态 |
 | `UuidFilter` | 带/不带连字符、带花括号、`urn:uuid:` 形式的 UUID 打码 |
@@ -564,13 +508,6 @@ python3 scripts/download_vanilla_mappings.py  # Mojang 官方映射，写入 map
 - 去重命中不会写入新 token，重复上传者无法获得删除权限。
 - 删除成功后清理缓存；缓存删除失败会重试，仍失败则写入 `log:<id>:deleted` 墓碑，TTL 与缓存一致。
 
-### 内容审核
-
-- 关键词与正则支持以 `enc:v1:` 密文保存，使用 AES-256-GCM 解密；密钥来自环境变量或 `runtime/.security_secret`（`0600`）。
-- 规则来源优先为 `Config.inc.php` 的 `security.contentRules`，其次为 `runtime/content_reject_rules.json`。
-- 单条规则解密失败会记录错误并跳过，不回退使用密文。
-- 异步审核命中违规会物理删除日志、停止反混淆，并对公网来源 IP 实施 24 小时封禁。
-
 ### IP 与代理
 
 - 只有 `security.trustedProxies` 与 `rateLimit.trustedProxies` 中的地址才被视为可信代理，支持 IPv4 与 IPv6 CIDR。
@@ -580,8 +517,10 @@ python3 scripts/download_vanilla_mappings.py  # Mojang 官方映射，写入 map
 
 ### 上传与边缘防护
 
-- ZIP 解压会拒绝空路径段、`.` / `..`、NUL、控制字符与超过 512 字节的文件名；按块读取，超预算立即中止。
-- 正文、附件、元数据、来源均有独立长度上限，避免超长字段触发数据库错误。
+- 上传路径不再执行应用层关键词/正则内容审核；内容防护由 OpenLiteWaf 的边缘规则承担。
+
+- ZIP 解压会拒绝空路径段、`.` / `..`、NUL、控制字符与超过 512 字节的文件名；按块读取，超过 20 MiB 总预算立即中止。
+- 文件总量、文件数、metadata、来源与请求体均有独立上限，避免超长字段或超大请求触发数据库错误。
 - `RateLimitMiddleware` 已实现但**未注册**到全局中间件链；启用前需确认 Redis 故障时的 503 fail-closed 行为是否符合预期。
 - 仓库默认的 nginx 配置对 API 做 30 r/s、burst 60 的基础限流，并加载 OpenLiteWaf 做 CC 与特征拦截；特征命中返回 403，CC 超限返回 429。
 - WAF 的 `/security`、`/security/stats`、`/security/logs` 与运维端点 `/security/unban`、`/security/bans` 由 nginx Lua 直接响应；未配置 `OPENLITEWAF_ADMIN_TOKEN`（至少 16 字符）时管理端点返回 404。
