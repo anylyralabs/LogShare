@@ -101,6 +101,56 @@ class ApiTest extends HttpTestCase
         $gone->assertStatus(404);
     }
 
+    public function testLegacyContentUploadRemainsCompatible(): void
+    {
+        if (!MongoStorage::ping()) {
+            $this->markTestSkipped('MongoDB is not available');
+        }
+
+        $content = "[12:34:56] [Server thread/INFO]: Legacy content upload " . uniqid('', true) . "\n";
+        $create = $this->post('/v1/log', [
+            'content' => $content,
+            'source' => 'legacy-client/1.0',
+        ]);
+
+        $create->assertSuccessful();
+        $id = (string) $create->json('id');
+        $token = (string) $create->json('token');
+        $this->assertSame(1, $create->json('fileCount'));
+        $this->assertSame('latest.log', $create->json('files.0.name'));
+        $rawPath = (string) parse_url((string) $create->json('raw'), PHP_URL_PATH);
+        $this->assertSame(trim($content), $this->get($rawPath)->getContent());
+
+        $delete = $this->delete("/v1/log/{$id}", [], ['Authorization' => 'Bearer ' . $token]);
+        $delete->assertSuccessful();
+    }
+
+    public function testLegacyContentWithFilesKeepsMainRawLink(): void
+    {
+        if (!MongoStorage::ping()) {
+            $this->markTestSkipped('MongoDB is not available');
+        }
+
+        $main = "[12:34:56] [Server thread/INFO]: Legacy main " . uniqid('', true) . "\n";
+        $crash = "Legacy crash " . uniqid('', true) . "\n";
+        $create = $this->post('/v1/log', [
+            'content' => $main,
+            'files' => [['name' => 'crash.txt', 'content' => $crash]],
+        ]);
+
+        $create->assertSuccessful();
+        $id = (string) $create->json('id');
+        $token = (string) $create->json('token');
+        $this->assertSame(2, $create->json('fileCount'));
+        $this->assertStringContainsString('/latest.log', (string) $create->json('raw'));
+
+        $rawPath = (string) parse_url((string) $create->json('raw'), PHP_URL_PATH);
+        $this->assertSame(trim($main), $this->get($rawPath)->getContent());
+
+        $delete = $this->delete("/v1/log/{$id}", [], ['Authorization' => 'Bearer ' . $token]);
+        $delete->assertSuccessful();
+    }
+
     public function testMultiFileListAndPerFileAccess(): void
     {
         if (!MongoStorage::ping()) {

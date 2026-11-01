@@ -45,12 +45,52 @@ test('parseJsonData requires a non-empty files array', function () {
     }
 });
 
-test('parseJsonData rejects the removed content field', function () {
+test('parseJsonData accepts legacy content and maps it to the main file', function () {
     $result = parseJsonViaContentParser(['content' => 'legacy body']);
+
+    expect($result)->toBeArray();
+    expect($result['mainFile'])->toBe('latest.log');
+    expect($result['files'])->toHaveCount(1);
+    expect($result['files'][0])->toMatchArray([
+        'name' => 'latest.log',
+        'data' => 'legacy body',
+        'size' => strlen('legacy body'),
+    ]);
+});
+
+test('parseJsonData keeps legacy content and files together', function () {
+    $result = parseJsonViaContentParser([
+        'content' => 'main body',
+        'files' => [
+            ['name' => 'crash.txt', 'content' => 'crash body'],
+        ],
+    ]);
+
+    expect($result)->toBeArray();
+    expect($result['mainFile'])->toBe('latest.log');
+    expect($result['files'])->toHaveCount(2);
+    expect($result['files'][0])->toMatchArray(['name' => 'latest.log', 'data' => 'main body']);
+    expect($result['files'][1])->toMatchArray(['name' => 'crash.txt', 'data' => 'crash body']);
+});
+
+test('parseJsonData avoids a legacy main file name collision', function () {
+    $result = parseJsonViaContentParser([
+        'content' => 'main body',
+        'files' => [
+            ['name' => 'latest.log', 'content' => 'existing file'],
+        ],
+    ]);
+
+    expect($result)->toBeArray();
+    expect($result['mainFile'])->toBe('main.log');
+    expect(array_column($result['files'], 'name'))->toBe(['main.log', 'latest.log']);
+});
+
+test('parseJsonData still rejects an empty legacy content without files', function () {
+    $result = parseJsonViaContentParser(['content' => '']);
 
     expect($result)->toBeInstanceOf(App\ApiError::class);
     expect($result->getHttpCode())->toBe(400);
-    expect($result->getMessage())->toContain("content");
 });
 
 test('parseJsonData parses files array via App\UploadParser', function () {

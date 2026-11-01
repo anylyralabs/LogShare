@@ -26,6 +26,7 @@ class LogController extends AbstractController
         $files = $parsed['files'] ?? [];
         $metadata = $parsed['metadata'] ?? [];
         $source = isset($parsed['source']) && is_string($parsed['source']) ? $parsed['source'] : null;
+        $mainFile = isset($parsed['mainFile']) && is_string($parsed['mainFile']) ? $parsed['mainFile'] : null;
 
         if (!is_array($files) || $files === []) {
             throw new ApiError(400, "At least one file is required.");
@@ -44,13 +45,19 @@ class LogController extends AbstractController
         $apiPrefix = $this->apiPrefix();
         $idValue = $id->get();
 
+        $filePayload = $this->fileListPayload($log);
         $payload = [
             'id' => $idValue,
             'url' => $urls['baseUrl'] . "/" . $idValue,
             'filesUrl' => $urls['apiBaseUrl'] . "/{$apiPrefix}/log/" . $idValue,
             'token' => $token->get(),
             'deduplicated' => $log->wasDeduplicated(),
-        ] + $this->fileListPayload($log);
+        ] + $filePayload;
+
+        // 旧版 content + files 上传时，raw 必须指向主文件而不是文件列表。
+        if ($mainFile !== null && count($filePayload['files']) > 1) {
+            $payload['raw'] = $this->fileUrl($idValue, $mainFile, 'raw');
+        }
 
         return $this->respondSuccess($payload, 'Log submitted successfully');
     }

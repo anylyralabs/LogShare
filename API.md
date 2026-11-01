@@ -12,7 +12,7 @@
 
 一条日志记录不再区分“正文”和“附件”，而是由一个 ID 下的若干文件组成：
 
-- 上传时只提交 `files`，没有 `content` 主日志字段。
+- 新客户端上传时只提交 `files`；旧版 `content` 字段仍然兼容，会映射为 `latest.log`，已有客户端不需要迁移。
 - 单个文件大小不设上限；全部文件展开后合计不超过 20 MiB。
 - 上传阶段逐文件脱敏，并在识别为 Minecraft 日志时执行 SpinYarn 反混淆。
 - 全文 Codex 分析不在上传时执行，只在请求某个文件的分析接口时执行。
@@ -70,11 +70,12 @@ POST /v1/log
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `files` | array | 是 | 文件数组，每个元素 `{name, content}`；文件数 ≤ 200，展开后合计 ≤ 20 MiB |
+| `files` | array | 否* | 文件数组，每个元素 `{name, content}`；文件数 ≤ 200，展开后合计 ≤ 20 MiB。与 `content` 至少提供一个 |
+| `content` | string | 否* | 旧版单文件字段；不为空时映射为 `latest.log`，与 `files` 同时存在时作为主文件 |
 | `metadata[]` | array | 否 | **分析核心输入**，每项 `{key, value, label?, visible?}`。最多 100 条；`key` 去除首尾空白后必须为 1–64 字符，`value` 字符串最长 1024 字符、其他类型会 JSON 序列化，`label` 最长 128 字符；重复 `key` 以首次出现为准；`visible=false` 不公开。JSON 与 urlencoded 均支持 |
 | `source` | string | 否 | 来源标识，最长 64 字符，格式如 `fcl/1.2.0` |
 
-`content` 字段已移除；所有日志内容必须放入 `files`。
+* `files` 与 `content` 至少提供一个；两者同时提供时，`content` 作为主文件 `latest.log`（若重名则使用 `main.log`），其余文件按 `files` 处理。旧客户端可以继续使用 `{"content": "...", "source": "..."}` 上传。
 
 **多文件与 ZIP：**
 
@@ -106,6 +107,7 @@ POST /v1/log
   "id": "sAbCdEf",
   "url": "https://logshare.cn/sAbCdEf",
   "filesUrl": "https://api.logshare.cn/v1/log/sAbCdEf",
+  "raw": "https://api.logshare.cn/v1/raw/sAbCdEf",
   "token": "3f9c1a7d...",
   "deduplicated": false,
   "fileCount": 2,

@@ -5,8 +5,9 @@ info:
   description: |
     Minecraft / Hytale log sharing platform.
 
-    A log is a set of files, not a single body. Upload accepts `files` only;
-    each file is filtered and deobfuscated independently. Full Codex analysis
+    A log is a set of files, not a single body. New clients upload `files`;
+    the legacy `content` field is still accepted and mapped to `latest.log`.
+    Each file is filtered and deobfuscated independently. Full Codex analysis
     runs only when an insights endpoint is called.
 
     Multi-file logs return `200` plus a file list when accessed without a
@@ -61,9 +62,9 @@ paths:
       tags: [Logs]
       summary: Submit a log
       description: |
-        Accepts `files`, `metadata` and `source` as JSON or form-urlencoded.
-        Files may be plain text or ZIP archives (auto-expanded). Limits:
-        200 files and 20 MiB total after expansion. No per-file size/line limit.
+        Accepts `files`, legacy `content`, `metadata` and `source` as JSON or
+        form-urlencoded. Files may be plain text or ZIP archives (auto-expanded).
+        Limits: 200 files and 20 MiB total after expansion. No per-file size/line limit.
       operationId: createLogV1
       requestBody:
         $ref: '#/components/requestBodies/LogUpload'
@@ -377,8 +378,13 @@ components:
         application/json:
           schema:
             type: object
-            required: [files]
+            anyOf:
+              - required: [files]
+              - required: [content]
             properties:
+              content:
+                type: string
+                description: Legacy single-file field, mapped to `latest.log` when non-empty.
               files:
                 type: array
                 minItems: 1
@@ -396,8 +402,13 @@ components:
         application/x-www-form-urlencoded:
           schema:
             type: object
-            required: [files]
+            anyOf:
+              - required: [files]
+              - required: [content]
             properties:
+              content:
+                type: string
+                description: Legacy single-file field, mapped to `latest.log` when non-empty.
               files:
                 type: array
                 items:
@@ -438,7 +449,7 @@ components:
           format: uri
     FileListResponse:
       type: object
-      required: [success, message, id, fileCount, requiresFileSelection, files]
+      required: [success, message, id, fileCount, requiresFileSelection, raw, files]
       properties:
         success:
           type: boolean
@@ -452,13 +463,17 @@ components:
           type: integer
         requiresFileSelection:
           type: boolean
+        raw:
+          type: string
+          format: uri
+          description: Main file URL, or `/raw/{id}` for single-file logs.
         files:
           type: array
           items:
             $ref: '#/components/schemas/FileEntry'
     LogCreateResponse:
       type: object
-      required: [success, message, id, url, filesUrl, token, deduplicated, fileCount, requiresFileSelection, files]
+      required: [success, message, id, url, filesUrl, raw, token, deduplicated, fileCount, requiresFileSelection, files]
       properties:
         success:
           type: boolean
@@ -472,6 +487,10 @@ components:
         filesUrl:
           type: string
           format: uri
+        raw:
+          type: string
+          format: uri
+          description: Main file URL, or `/raw/{id}` for single-file logs.
         token:
           type: string
           pattern: '^[a-f0-9]{64}$'
@@ -489,7 +508,7 @@ components:
             $ref: '#/components/schemas/FileEntry'
     LogMetaResponse:
       type: object
-      required: [success, message, id, fileCount, requiresFileSelection, size, lines, files, filesUrl]
+      required: [success, message, id, fileCount, requiresFileSelection, size, lines, raw, files, filesUrl]
       properties:
         success:
           type: boolean
@@ -519,6 +538,10 @@ components:
         source:
           type: string
           nullable: true
+        raw:
+          type: string
+          format: uri
+          description: Main file URL, or `/raw/{id}` for single-file logs.
         files:
           type: array
           items:

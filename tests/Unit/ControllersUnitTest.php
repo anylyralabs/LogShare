@@ -158,10 +158,42 @@ test('LogMetaController returns metadata and the file list', function () {
     expect($body['id'])->toBe($rawId);
     expect($body['source'])->toBe('launcher/1.0.0');
     expect($body['filesUrl'])->toContain('/v1/log/' . $rawId);
-    expect($body)->not->toHaveKey('raw');
+    expect($body['raw'])->toContain('/v1/raw/' . $rawId);
     $fileNames = array_column($body['files'], 'name');
     expect($fileNames)->toContain('extra.txt');
     expect($body['files'][0])->toHaveKeys(['name', 'size', 'lines', 'raw', 'insights']);
+});
+
+test('LogController accepts legacy content upload and returns a raw link', function () {
+    $payload = json_encode([
+        'content' => "Legacy main log\n",
+        'source' => 'legacy/1.0',
+    ]);
+    $mockStream = Mockery::mock(\Psr\Http\Message\StreamInterface::class);
+    $mockStream->shouldReceive('getContents')->andReturn($payload);
+
+    $mockUri = Mockery::mock(\Psr\Http\Message\UriInterface::class);
+    $mockUri->shouldReceive('getPath')->andReturn('/v1/log');
+
+    $mockReq = Mockery::mock(RequestInterface::class);
+    $mockReq->shouldReceive('getUri')->andReturn($mockUri);
+    $mockReq->shouldReceive('getServerParams')->andReturn(['remote_addr' => '127.0.0.1']);
+    $mockReq->shouldReceive('getHeaderLine')->with('Content-Type')->andReturn('application/json');
+    $mockReq->shouldReceive('getHeaderLine')->with('Content-Encoding')->andReturn('');
+    $mockReq->shouldReceive('getHeaderLine')->with('User-Agent')->andReturn('');
+    $mockReq->shouldReceive('getBody')->andReturn($mockStream);
+    $mockReq->shouldReceive('getUploadedFiles')->andReturn([]);
+    $mockReq->shouldReceive('getParsedBody')->andReturn(['content' => "Legacy main log\n", 'source' => 'legacy/1.0']);
+
+    $controller = instantiateController(\App\Controller\LogController::class, $mockReq);
+    $resp = $controller->create();
+    expect($resp->getStatusCode())->toBe(200);
+    $body = json_decode((string) $resp->getBody(), true);
+    expect($body['success'])->toBeTrue();
+    expect($body['fileCount'])->toBe(1);
+    expect($body['files'][0]['name'])->toBe('latest.log');
+    expect($body['raw'])->toContain('/v1/raw/' . $body['id']);
+    expect($body['raw'])->not->toContain('latest.log');
 });
 
 test('InsightsController analyses single files and lists multiple files', function () {

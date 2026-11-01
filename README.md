@@ -237,7 +237,7 @@ Config::GetPath('urls.apiBaseUrl'); // 嵌套项
 ### 约定
 
 - 默认地址示例为 `https://api.logshare.cn`；路径前缀为 `/{version}`，`v1` 为推荐写法，`1` 为兼容旧客户端的别名。
-- 上传支持 `application/json` 与 `application/x-www-form-urlencoded`，字段为 `files`、`metadata` 与 `source`。
+- 上传支持 `application/json` 与 `application/x-www-form-urlencoded`，字段为 `files`、`metadata` 与 `source`；旧版 `content` 字段继续兼容。
 - 请求体支持 `Content-Encoding: gzip`、`deflate`、`br`，多层编码按逆序解压，最多 5 层。
 - 成功响应统一为 `success: true` 加业务字段；失败响应为 `success: false`、`error`、`code`。`/v1/limits` 与单文件 `/v1/insights/{id}` 例外，直接返回原始 JSON。
 - 读接口与上传接口不要求鉴权；删除接口要求 Bearer token。
@@ -278,13 +278,15 @@ curl -X POST https://api.logshare.cn/v1/log \
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `files` | array | 必填。每项为 `{"name": "...", "content": "..."}`；文件数 ≤ 200，展开后合计 ≤ 20 MiB |
+| `files` | array | 新契约。每项为 `{"name": "...", "content": "..."}`；文件数 ≤ 200，展开后合计 ≤ 20 MiB。与 `content` 至少提供一个 |
+| `content` | string | 旧版兼容字段。不为空时映射为主文件 `latest.log`；与 `files` 同时存在时作为主文件，若重名则使用 `main.log` |
 | `metadata` | array | 分析核心输入。最多 100 条；每项支持 `key`（trim 后 1–64 字符）、`value`（字符串最长 1024 字符，其他类型 JSON 序列化）、`label`（最长 128 字符）、`visible`（默认 true）；重复 `key` 保留首条 |
 | `source` | string | 来源标识，按 UTF-8 边界截断到 64 字符；省略时尝试从 User-Agent 解析 `名称/版本`，否则记为 `未指定` |
 
 限制与处理：
 
 - 请求体解压后上限 32 MiB；文件数 ≤ 200，展开后合计 ≤ 20 MiB；不限制单个文件大小或行数。
+- 旧客户端可以继续提交 `content`（可带 `files` 附件）；新客户端应只提交 `files`。上传响应会同时返回文件列表与顶层 `raw` 链接。
 - `.zip` 会逐条流式解压，并检查路径穿越、控制字符、超长文件名与解压膨胀。
 - 同名文件会重命名为 `名字 (2).扩展名`、`名字 (3).扩展名`，避免与数据库主键冲突。
 - 每个文件独立经过 `filter.pre` 过滤链并尝试 SpinYarn 反混淆；不会执行全文 Codex 分析。
@@ -300,6 +302,7 @@ curl -X POST https://api.logshare.cn/v1/log \
   "id": "s4Kd9xQ",
   "url": "https://logshare.cn/s4Kd9xQ",
   "filesUrl": "https://api.logshare.cn/v1/log/s4Kd9xQ",
+  "raw": "https://api.logshare.cn/v1/raw/s4Kd9xQ",
   "token": "64 位十六进制字符串",
   "deduplicated": false,
   "fileCount": 2,
@@ -407,11 +410,11 @@ curl https://api.logshare.cn/v1/limits
 
 1. `CorsMiddleware` 处理跨域；`OPTIONS` 请求直接返回。
 2. `ContentParser` 读取请求体，先检查原始大小，再按 `Content-Encoding` 逆序解压，最后解析 JSON 或表单。
-3. 校验 `files` 非空，检查客户端 IP 是否在配置、Redis、本地封禁文件或 WAF 快照中。
+3. 校验 `files` 或旧版 `content` 至少有一个，检查客户端 IP 是否在配置、Redis、本地封禁文件或 WAF 快照中。
 4. `Log::put()` 对每个文件执行前置过滤链，识别 Minecraft 日志并尝试 SpinYarn 反混淆；反混淆失败按原文保留。
 5. 反混淆阶段识别出的第一份 Minecraft 日志可补全 `version` / `loader` 元数据；客户端显式提交的同名键优先。
 6. `MongoStorage::Put()` 计算 `xxh128` 指纹，先写 `pending` 父文档占住 ID，再写内容分块，最后把父文档置为 `ready`；主存储成功后按大小决定是否写 Redis 缓存。去重命中时不写缓存。
-7. 返回 200，响应包含 ID、文件列表、`filesUrl`、token 与 `deduplicated`。全文 Codex 分析不会在这里执行。
+7. 返回 200，响应包含 ID、文件列表、`filesUrl`、顶层 `raw`、token 与 `deduplicated`。全文 Codex 分析不会在这里执行。
 
 ### 读取
 

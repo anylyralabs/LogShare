@@ -41,7 +41,7 @@ abstract class AbstractController
     /**
      * Build the public file list with absolute raw/insights URLs.
      *
-     * @return array{id: string, fileCount: int, requiresFileSelection: bool, files: array<int, array{name: string, size: int, lines: int, raw: string, insights: string}>}
+     * @return array{id: string, fileCount: int, requiresFileSelection: bool, raw: string, files: array<int, array{name: string, size: int, lines: int, raw: string, insights: string}>}
      */
     protected function fileListPayload(\App\Log $log): array
     {
@@ -60,15 +60,22 @@ abstract class AbstractController
             ];
         }
 
+        $urls = \App\Config::Get('urls');
+        $apiPrefix = $this->apiPrefix();
+        $raw = count($files) === 1
+            ? $urls['apiBaseUrl'] . "/{$apiPrefix}/raw/{$idValue}"
+            : ($files[0]['raw'] ?? $urls['apiBaseUrl'] . "/{$apiPrefix}/raw/{$idValue}");
+
         return [
             'id' => $idValue,
             'fileCount' => count($files),
             'requiresFileSelection' => count($files) > 1,
+            'raw' => $raw,
             'files' => $files,
         ];
     }
 
-    private function fileUrl(string $id, string $name, string $endpoint): string
+    protected function fileUrl(string $id, string $name, string $endpoint): string
     {
         $encodedName = implode('/', array_map('rawurlencode', explode('/', $name)));
         $urls = \App\Config::Get('urls');
