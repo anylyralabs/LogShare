@@ -4,13 +4,14 @@
 
 ### 变更
 
-- **纯文件模型**：上传只接受 `files`，移除 `content` 正文、主文件与旧日志兼容；`logs` 表不再保存 `data`，所有内容由 `log_files` 承载。
+- **纯文件模型**：上传只接受 `files`，移除 `content` 正文、主文件与旧日志兼容；所有内容由 `log_chunks` 承载。
+- **存储迁移到 MongoDB**：`logs` 父文档保存 token、来源、指纹、metadata 与文件描述，文件内容按 8 MiB 分块写入 `log_chunks`，规避 BSON 16 MiB 限制。`created` TTL 索引实现滚动过期；`autoCompact` 可用时使用内置压缩，否则由 `MongoCompactProcess` 周期性 `compact`，自动压缩并归还磁盘；移除 MariaDB 分区、Event 与 `mariadb-events` 容器。
 - **移除异步事件队列**：删除 EventQueue、Redis Streams 消费者、安全审核 handler 与反混淆 handler；上传时逐文件同步执行 SpinYarn 反混淆。
 - **移除应用层内容审核**：不再加载关键词/正则内容规则；内容防护由边缘 OpenLiteWaf 承担。
 - **按文件访问**：`GET /v1/log/{id}` 返回文件列表；单文件 `raw`/`insights` 自动选择，多文件返回 `200` + 文件列表；新增 `/v1/insights/{id}/{filename}`。
 - **移除 `POST /v1/analyse`**：分析只针对已存储文件的指定文件名执行。
 - **限额调整**：最多 200 个文件、展开后合计 20 MiB、请求体解压后 32 MiB；不限制单个文件大小或行数。
-- **部署要求**：单文件可能超过 16 MiB，MariaDB 需设置 `max_allowed_packet=64M`；旧 `logs.data` 结构需清空重建。
+- **部署要求**：MongoDB 7.0+（TTL + 自动 compact；autoCompact 可用时优先使用）；旧 MariaDB 日志不迁移，旧 `s` 开头 ID 不可读。
 
 ### 修复
 

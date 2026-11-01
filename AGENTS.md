@@ -1,12 +1,12 @@
 # LogShare — Agent Guide
 
-面向 Minecraft / Hytale 的日志分享与本地 Codex 解析平台；AI 智能诊断已外包给外部服务。仓库主体是 PHP 后端、边缘 Lua 与 Docker 配置，没有前端构建。技术栈：PHP 8.4+ / Hyperf 3.2 / Swoole 6.2 常驻协程、MariaDB、Redis（可选）。完整目录树与用户文档见 `README.md`；API 契约以 `API.md`、`openapi.yaml`、`postman_collection.json` 为准。
+面向 Minecraft / Hytale 的日志分享与本地 Codex 解析平台；AI 智能诊断已外包给外部服务。仓库主体是 PHP 后端、边缘 Lua 与 Docker 配置，没有前端构建。技术栈：PHP 8.4+ / Hyperf 3.2 / Swoole 6.2 常驻协程、MongoDB 7.0+、Redis（可选）。完整目录树与用户文档见 `README.md`；API 契约以 `API.md`、`openapi.yaml`、`postman_collection.json` 为准。
 
 ## 入口与结构
 
 - `bin/hyperf.php`：CLI 与服务入口；`core.php`：引导并加载 `Config.inc.php`；PSR-4 将 `App\` 映射到 `app/`。
 - HTTP 监听 `0.0.0.0:9501`（`config/autoload/server.php`）。控制器使用 Hyperf 注解路由，前缀 `/{version:v?1}` 同时匹配已弃用的 `/1` 与 `/v1`。
-- 存储后端固定为 MariaDB（`storage.storageId` = `s`）；日志 ID 首字符为存储标识。Redis 不是硬依赖，缺失时读缓存降级。
+- 存储后端固定为 MongoDB（`storage.storageId` = `m`）；日志 ID 首字符为存储标识。Redis 不是硬依赖，缺失时读缓存降级。
 - `OpenLiteWaf/`（当前 1.3.1）、`OpenLiteStats/`（当前 1.2.0）是独立仓库的 git submodule（GitHub `anylyralabs/*`），有自己的测试与发布流程；改动需在各自仓库提交，再回主仓更新指针。
 - 参考文档：`OpenLiteWaf/README.md`、`docs/`、`CHANGELOG.md`；`LOCAL_DEV_NOTES.md` 仅本地、被 `.git/info/exclude` 排除，永不提交。
 
@@ -16,6 +16,7 @@
 git submodule update --init --recursive   # clone / pull 后必须
 composer install
 cp Config.inc.example.php Config.inc.php
+php scripts/init_mongodb.php   # 索引 / TTL / 磁盘回收
 php bin/hyperf.php start
 
 composer test                 # Pest 全量
@@ -25,7 +26,7 @@ php vendor/bin/pest tests/Unit/FilterTest.php
 php vendor/bin/pest --filter=TestName
 ```
 
-- 测试引导在 `tests/bootstrap.php`：自动创建 `Config.inc.php`，未加载 ext-redis 时用 `RedisMock`。单测可离线跑；`tests/Integration` 的部分用例需要 MariaDB / Redis，缺失会 skip。`tests/Unit/ControllersUnitTest.php` 用反射直接实例化控制器，避免 Hyperf AOP 代理干扰覆盖率。
+- 测试引导在 `tests/bootstrap.php`：自动创建 `Config.inc.php`，未加载 ext-redis 时用 `RedisMock`。单测可离线跑；`tests/Integration` 与 `MongoStorageTest` 需要 MongoDB / Redis，缺失会 skip。`tests/Unit/ControllersUnitTest.php` 用反射直接实例化控制器，避免 Hyperf AOP 代理干扰覆盖率。
 - 集成环境：先由 `.env.example` 准备 `.env`，再 `docker compose --env-file .env -f docker/compose.yaml up -d`。
 - `RedisClient::setTestConnection()` 可让 Redis 相关单测固定走 `RedisMock`；压缩请求用例需要 ext-brotli（CI 已装）。
 - Lua 回归：`php OpenLiteWaf/tests/openlitewaf_regex_test.php`、`lua5.1 OpenLiteWaf/tests/openlitewaf_logic_test.lua`、`lua5.1 OpenLiteStats/tests/openlitestats_logic_test.lua`、`luac5.1 -p OpenLiteWaf/lua/*.lua OpenLiteStats/lua/*.lua`。两套 Lua 测试 stub 了 `ngx`，只能验证流程/计数/作用域，真实 `ngx.re` 与请求体覆盖在 E2E。
@@ -34,17 +35,18 @@ php vendor/bin/pest --filter=TestName
 ## 请求链路
 
 - 上传：`POST /v1/log` → `RequestParser` 解压 → `ContentParser` 解析 `files` / `metadata` / `source` → `UploadParser` 校验 / ZIP 展开（同名条目自动改名为 `name (2)`）→ `Log::put()` 逐文件 `preFilter` + SpinYarn 反混淆 → 存储 → 200。没有正文、没有异步队列、没有应用层内容审核；全文 Codex 分析只在 `/v1/insights/{id}[/{filename}]` 按需执行。
-- 读取：`GET /v1/log/{id}` 返回文件列表；`GET /v1/raw/{id}` 单文件返回内容、多文件返回 200 + 文件列表；带文件名才取指定文件。`GET /v1/insights/{id}` 同理，多文件先列文件，`/insights/{id}/{filename}` 才执行 Codex。`DELETE /v1/log/{id}` 校验 Bearer 删除 token：库里只存 `sha256:<hex>`，`Token::fromHash()` 永远只比较哈希，**存储值本身不能当凭证**。读路径不做分区 DDL，过期回收只走 MariaDB Event。
+- 读取：`GET /v1/log/{id}` 返回文件列表；`GET /v1/raw/{id}` 单文件返回内容、多文件返回 200 + 文件列表；带文件名才取指定文件。`GET /v1/insights/{id}` 同理，多文件先列文件，`/insights/{id}/{filename}` 才执行 Codex。`DELETE /v1/log/{id}` 校验 Bearer 删除 token：库里只存 `sha256:<hex>`，`Token::fromHash()` 永远只比较哈希，**存储值本身不能当凭证**。读路径不做清理或 DDL；过期由 MongoDB TTL 索引处理，`autoCompact` 可用时由其持续回收（MongoDB 8.0 + 相应权限）；否则由 `MongoCompactProcess` 周期性 `compact` 兜底。
 
 ## 存储 / ID
 
-- 日志 ID 固定 7 位：首字符为存储标识（当前仅 MariaDB）+ 6 位随机。不要改 `id.characters` 或 `id.length`，已有 ID 全依赖它们。
-- 上传限制在落库前强制执行：最多 200 个文件、展开后合计 20 MiB、请求体解压后 32 MiB；不限制单个文件大小或行数。ZIP 必须继续防路径穿越与膨胀炸弹。单文件可能超过 16 MiB，MariaDB 必须设置 `max_allowed_packet=64M`。
-- `logs` / `log_files` / `log_metadata` 按 `created` 做天级 RANGE 分区，必须保留 `p_future` 兜底。分区表不能有外键，级联删除由 `MariaDbStorage` 显式完成（先子表后父表）；所有唯一键都必须包含 `created`；`Renew()` 必须同步子表 `created`，否则父表分区丢弃后会留下永久孤儿行。
-- 过期清理只 `DROP PARTITION`。运行期绝不重建历史分区（会与幸存分区重名，ERROR 1517）；判断历史区间是否已铺过，用「最靠近今天的历史分区」而非分区计数；SQL 里 `PARTITION_DESCRIPTION` 必须 `CAST(... AS SIGNED)`，否则负 cutoff 静默失效；DROP 必须逐个执行（`information_schema` 陈旧视图会拼出已删分区名，ERROR 1064）。
-- `logs.token` 存 `sha256:<hex>`（71 字符），列宽为 `VARCHAR(80)`；旧库升级需执行 `php scripts/widen_token_column.php`（幂等、只 ALTER，不清数据），否则上传会以 1406 失败。
-- 改 `storage.storageTime` 后必须 `php scripts/sync_mariadb_events.php` 并重启 `mariadb-events` 容器。旧库结构不兼容，迁移用 `php scripts/migrate_partitioned_storage.php --yes`：它会 DROP 三表并重建，现有日志全丢，执行前先确认已备份。
-- 上传去重按「按名称排序的文件集合 + source」计算 `xxh128`，命中直接返回旧 ID；旧库缺 `fingerprint` 列时静默降级，不要阻断上传。
+- 日志 ID 固定 7 位：首字符为存储标识（当前仅 MongoDB）+ 6 位随机。不要改 `id.characters` 或 `id.length`。
+- 上传限制在落库前强制执行：最多 200 个文件、展开后合计 20 MiB、请求体解压后 32 MiB；不限制单个文件大小或行数。ZIP 必须继续防路径穿越与膨胀炸弹。单文件可能超过 16 MiB，`MongoStorage` 按 8 MiB 拆块写入 `log_chunks`。
+- `logs` 父文档保存 token、来源、指纹、metadata 与文件描述；文件内容写入 `log_chunks`，单块 8 MiB，规避 MongoDB 16 MiB BSON 上限。父文档先以 `status=pending` 占住 `_id`，分块完成后再置为 `ready`；读取只认 `ready`。
+- 父文档与分块都带 BSON Date 类型的 `created`，各自建立 TTL 索引；TTL 的 `expireAfterSeconds` 是 `storageTime + 120` 秒宽限，查询仍按 `storageTime` 过滤逻辑过期。`Renew()` 先更新分块、再更新父文档。
+- `scripts/init_mongodb.php` 创建/同步索引与 TTL，并尝试启用 MongoDB 8.0 `autoCompact`；`MongoCompactProcess` 在 autoCompact 不可用（含 7.x）时按 `mongo.compactInterval` 周期性执行 `compact`。磁盘自动收缩依赖二者，不要删除。
+- `logs.token` 存 `sha256:<hex>`（71 字符）；MongoDB 字符串没有列宽限制，但格式与哈希比较逻辑保持不变。
+- 改 `storage.storageTime` 后重启 Hyperf，启动脚本会通过 `collMod` 更新 TTL。旧 MariaDB 日志不迁移，旧 `s` 开头 ID 不可读。
+- 上传去重按「按名称排序的文件集合 + source」计算 `xxh128`，只匹配 `ready` 且未过期的父文档。
 
 ## 控制器 / API
 
@@ -67,6 +69,7 @@ php vendor/bin/pest --filter=TestName
 ## 运行时 / 部署
 
 - Swoole 是常驻进程：进程级缓存、扩展句柄、注解代理类都跨请求存活。改解析 / 反混淆 / 进程状态后必须重启，不能只改文件。
+- `ext-mongodb` 基于 libmongoc，Swoole 的协程 hook 不生效；大文件读写会同步阻塞当前 worker。上线前做并发压测；若成为瓶颈，再评估 Swoole RemoteObject/GoTask 隔离，不要直接假设它已被协程化。
 - 常驻进程外呼 cURL 一律 `CURLOPT_FORBID_REUSE => true`，并在 `finally` 中 `curl_close` / `$ch = null`，否则 FD 累积到 EMFILE；不要用 Swoole 协程 hook 不支持的选项（如 `CURLOPT_MAXFILESIZE`），在应用层限制载荷。
 - `RedisClient` 显式设置 `OPT_READ_TIMEOUT`（默认 10s），不要调低，否则会周期性断连。
 - 诊断日志用 `App\Syslog::error()`，不要直接 `error_log()`；`runtime/logs/system.log` 有 5MB 轮转，不要再整文件 `file()`。
@@ -74,7 +77,7 @@ php vendor/bin/pest --filter=TestName
 - 响应压缩由 Swoole `http_compression`（level 6、min 1024）优先 Brotli；nginx 只做 gzip 兜底并透传 `Accept-Encoding`。
 - 配置统一走 `App\Config::Get()`；修改 `Config.inc.php` 后需重启 Swoole 进程生效，不要在进程启动时缓存一份副本。
 - Docker 部署中 PHP 代码烘进 hyperf 镜像，改 PHP 必须重建镜像；`Config.inc.php`、`.env`、`mappings/`、`runtime/` 是挂载。重建前先 `rm -rf runtime/container` 清扫描缓存（尤其 `SCAN_CACHEABLE=true`）。
-- Compose 的必填密码变量用 `${VAR:?}`，命令带 `--env-file .env`；`docker compose down -v` 会删 `logshare-mariadb-data` / `logshare-redis-data`，不要执行。
+- Compose 的必填密码变量用 `${VAR:?}`，命令带 `--env-file .env`；`docker compose down -v` 会删 `logshare-mongo-data` / `logshare-redis-data`，不要执行。
 - 镜像内的 jemalloc（`LD_PRELOAD` + `MALLOC_CONF`）是为常驻进程 RSS 回落，改 Dockerfile 时保留。
 
 ## 边缘 WAF / 统计（submodule）
@@ -88,10 +91,10 @@ php vendor/bin/pest --filter=TestName
 ## CI / 发布
 
 - CI 主入口在 GitHub Actions：`.github/workflows/` 跑 Pest、composer、PHPStan、架构测试、Swoole 冒烟与 Docker E2E；`.cnb/` 配置保留为可选/历史流水线。
-- 平台坑：子配置按「分支 + 事件」合并，整条流水线数组不能用 `!reference`（会静默产出空流水线）；`script` 由 sh/dash 执行，用 `set -eu`，不要用 `pipefail`；`services` 只有 docker/vscode，MariaDB/Redis 需自行 `docker run`，且 dind 与流水线容器网络不通（用同一自定义网络 + 容器名）；`docker:27-cli` 没有 curl/openssl；Stage 的 `if` 不继承，门控写在真正执行任务的 Stage 上。
+- 平台坑：子配置按「分支 + 事件」合并，整条流水线数组不能用 `!reference`（会静默产出空流水线）；`script` 由 sh/dash 执行，用 `set -eu`，不要用 `pipefail`；`services` 只有 docker/vscode，MongoDB/Redis 需自行 `docker run`，且 dind 与流水线容器网络不通（用同一自定义网络 + 容器名）；`docker:27-cli` 没有 curl/openssl；Stage 的 `if` 不继承，门控写在真正执行任务的 Stage 上。
 - `docker.build` 指定的 Dockerfile 由 CNB 预构建并缓存；Stage 里不要再跑一次 `docker build`（会因缓存包冲突立即失败），用 `${CNB_PIPELINE_DOCKER_IMAGE}` 取已构建镜像。
-- 覆盖率先 `--coverage-clover` 再用 `scripts/clover_to_lcov.php` 转 LCOV；`mariadb-events.sql` 含 `DELIMITER` 存储过程，只能由 mysql/mariadb 客户端导入。
-- 远端已迁移到 GitHub，`.github/workflows/` 直接触发；`scripts/ci_init_mariadb.sh` 刻意剔除 `CALL logshare_install_partitions()` 以匹配既有分区测试，改动前先读脚本注释。
+- 覆盖率先 `--coverage-clover` 再用 `scripts/clover_to_lcov.php` 转 LCOV。
+- 远端已迁移到 GitHub，`.github/workflows/` 直接触发；CI 与生产 Compose 均使用兼容 ARM64 39-bit VA 的 `mongo:7.0`；`scripts/init_mongodb.php` 初始化索引/TTL，`MongoCompactProcess` 周期性 `compact` 完成磁盘回收。MongoDB 8.0 且账号具备权限时会优先使用内置 `autoCompact`。
 - 版本单一来源是 `app/Version.php`。发版时改 `CHANGELOG.md` 首条并同步 `README.md` / `openapi.yaml`，提交信息以 `[Build]` 开头；tag 与 Release notes 取自 CHANGELOG 首条。
 - 版本策略：当前用户要求保持 `1.8.5`，不要自行递增；后续发版按用户指定版本执行。
 - 发布包用 `git archive` 分别导出主仓与两个子模块后合并，确保 submodule 内容不会在归档中缺失；资产名 `LogShare-v<version>.tar.gz`，并附 `.sha256` 校验文件。

@@ -2,7 +2,7 @@
 
 面向 Minecraft / Hytale 的服务端日志分享与解析平台。上传日志后返回 7 位短 ID、纯文本访问地址和删除凭证；服务同时使用 Aternos Codex 解析游戏版本、模组加载器与崩溃信息，并在扩展可用时通过 SpinYarn 还原 Fabric / Vanilla 的混淆栈。
 
-后端是 PHP 8.4+、Hyperf 3.2、Swoole 6.2 的常驻协程应用：日志文件写入 MariaDB（按天 RANGE 分区），Redis 承担读缓存，OpenResty 上的 OpenLiteWaf / OpenLiteStats 子模块负责边缘防护与访问统计。
+后端是 PHP 8.4+、Hyperf 3.2、Swoole 6.2 的常驻协程应用：日志文件写入 MongoDB（TTL 索引滚动过期，autoCompact（若可用）或周期 compact 归还磁盘），Redis 承担读缓存，OpenResty 上的 OpenLiteWaf / OpenLiteStats 子模块负责边缘防护与访问统计。
 
 ## 目录
 
@@ -30,7 +30,7 @@
 - **内容去重**：按来源与按名称排序的文件集合计算 `xxh128` 指纹，重复上传直接复用已有 ID。
 - **隐私过滤**：入库前统一脱敏 IPv4 / IPv6、UUID、XUID、会话 token、客户端 ID、访问 token、坐标与用户名路径。
 - **上传期反混淆**：逐文件识别 Fabric / Vanilla 日志并调用 SpinYarn；扩展缺失或失败时原样透传。全文分析只在显式请求分析接口时执行。
-- **自动过期**：日志按 `created` 做天级 RANGE 分区，过期数据通过 `DROP PARTITION` 回收，磁盘空间真正归还操作系统。
+- **自动过期与回收**：`logs` 与内容分块都带 `created` TTL；优先使用 `autoCompact`（MongoDB 8.0 且账号有权限时），不可用时由 `MongoCompactProcess` 周期 `compact`，把可回收磁盘归还操作系统。
 - **边缘防护**：OpenResty 侧提供 CC 限流、攻击特征拦截、封禁管理与访问统计；应用层保留 IP 黑名单；应用层内容审核已移除。
 
 ## 技术栈
@@ -38,7 +38,7 @@
 | 层级 | 技术 |
 | --- | --- |
 | 运行时 | PHP >= 8.4（生产镜像使用 PHP 8.5）、Hyperf 3.2、Swoole 6.2 |
-| 数据库 | MariaDB 11.8，`logs` / `log_files` / `log_metadata` 按天分区 |
+| 数据库 | MongoDB 7.0+，`logs` 父文档 + `log_chunks` 内容分块，TTL + 自动 compact |
 | 缓存 | Redis 7.4（可选），只用于读缓存 |
 | 日志解析 | `aternos/codex-minecraft` ^5.1、`aternos/codex-hytale` ^2.0 |
 | 反混淆 | SpinYarn PHP 扩展（可选，Docker 镜像内编译） |
@@ -55,11 +55,11 @@ LogShare/
 ├── config/                     # Hyperf 配置：server、database、middleware、exceptions
 ├── app/
 │   ├── Controller/             # HTTP 控制器（注解路由）
-│   ├── Storage/                # StorageInterface 与 MariaDbStorage
+│   ├── Storage/                # StorageInterface 与 MongoStorage
 │   ├── Cache/                  # CacheInterface 与 RedisCache
 │   ├── Client/                 # RedisClient、SpinYarnClient
 │   ├── Filter/                 # 上传前置脱敏过滤器
-│   ├── System/                 # SecurityService、LogPartitionManager
+│   ├── System/                 # SecurityService、MongoCompactProcess
 │   ├── Data/                   # Token、MetadataEntry
 │   ├── Parser/                 # RequestParser（压缩请求体）
 │   ├── Exception/Handler/      # ApiError 与兜底异常渲染
@@ -69,10 +69,9 @@ LogShare/
 │   ├── Id.php / Config.php     # ID 编解码与配置访问
 │   └── Version.php             # 版本号单一来源
 ├── docker/
-│   ├── compose.yaml            # nginx / hyperf / mariadb / redis / acme
+│   ├── compose.yaml            # nginx / hyperf / mongo / redis / acme
 │   ├── hyperf.Dockerfile       # PHP 8.5 + Swoole + SpinYarn 构建
-│   ├── mariadb-init.sql        # 三张分区表结构
-│   ├── mariadb-events.sql      # 分区安装与过期清理事件
+│   ├── mongo-init.js           # 首次启动创建应用用户
 │   └── nginx/default.conf      # TLS、反向代理、WAF/统计入口
 ├── mappings/                   # Yarn（*.tiny.gz）与 Vanilla（vanilla/*.txt）映射
 ├── OpenLiteWaf/                # 边缘 WAF（独立仓库 submodule）
@@ -89,8 +88,8 @@ LogShare/
 ### 环境要求
 
 - PHP >= 8.4：`ext-json`、`ext-zlib`、`ext-mbstring`、`ext-curl`、`ext-openssl`、`ext-zip`。
-- 运行服务还需要 `ext-swoole`（>= 6.2）、`ext-pdo_mysql`；`ext-redis` 用于读缓存，缺失时自动降级；`ext-brotli` 用于 Brotli 请求体与响应压缩，缺失时返回 501。
-- MariaDB 11.x。表结构依赖 RANGE 分区与 Event Scheduler；允许 20 MiB 单文件写入，需设置 `max_allowed_packet=64M`。
+- 运行服务还需要 `ext-swoole`（>= 6.2）、`ext-mongodb`（>= 2.5）；`ext-redis` 用于读缓存，缺失时自动降级；`ext-brotli` 用于 Brotli 请求体与响应压缩，缺失时返回 501。
+- MongoDB 7.0+。TTL 索引负责过期；8.0 且账号有权限时使用 `autoCompact`，否则由应用进程周期 `compact`。单文件内容超过 16 MiB 时由应用拆成 8 MiB 分块写入。
 - Redis 7.x 可选。即使不启用缓存，`Config::validate()` 仍要求 `cache.redis.host` 与端口非空。
 - Composer 2；容器方式需要 Docker 与 Compose 插件。
 
@@ -100,16 +99,15 @@ LogShare/
 composer install
 cp Config.inc.example.php Config.inc.php
 
-# 初始化数据库（默认库名 logshare）
-mariadb -uroot -p -e \
-  'CREATE DATABASE IF NOT EXISTS logshare CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'
-mariadb -uroot -p logshare < docker/mariadb-init.sql
+# 启动本地 MongoDB 7.0+（8.0 会自动启用 autoCompact）
+mongod --dbpath ./tmp/mongo-data
 
-# 按需在 .env 或进程环境中设置 DB_HOST / DB_DATABASE / DB_USERNAME / DB_PASSWORD
+# 初始化索引、TTL 与磁盘回收能力
+php scripts/init_mongodb.php
+
+# 按需在 .env 或进程环境中设置 MONGODB_URI / MONGODB_DATABASE
 php bin/hyperf.php start
 ```
-
-本地 MariaDB 若保持默认 16 MiB `max_allowed_packet`，超过 16 MiB 的文件会写入失败；请在 `[mysqld]` 中设置 `max_allowed_packet=64M`，或执行 `SET GLOBAL max_allowed_packet=67108864`。
 
 服务默认监听 `0.0.0.0:9501`。启动后可访问：
 
@@ -117,7 +115,7 @@ php bin/hyperf.php start
 curl http://127.0.0.1:9501/v1/limits
 ```
 
-本地没有 Redis 时，缓存读取会失败并回源 MariaDB；Redis 扩展也缺失时 `RedisClient::getRedis()` 返回 `null`，不会阻断上传。`Config.inc.php` 不存在时会回退到 `Config.inc.example.php` 的默认值，但生产环境应显式提供完整配置。
+本地没有 Redis 时，缓存读取会失败并回源 MongoDB；Redis 扩展也缺失时 `RedisClient::getRedis()` 返回 `null`，不会阻断上传。`Config.inc.php` 不存在时会回退到 `Config.inc.example.php` 的默认值，但生产环境应显式提供完整配置。
 
 ### Docker Compose
 
@@ -132,7 +130,7 @@ git submodule update --init --recursive
 ```bash
 cp Config.inc.example.php Config.inc.php
 cp .env.example .env
-# 编辑 .env：MARIADB_PASSWORD、MARIADB_ROOT_PASSWORD、REDIS_PASSWORD
+# 编辑 .env：MONGO_ROOT_PASSWORD、MONGO_PASSWORD、REDIS_PASSWORD
 ```
 
 启动：
@@ -141,14 +139,13 @@ cp .env.example .env
 docker compose --env-file .env -f docker/compose.yaml up -d
 ```
 
-Compose 已为 MariaDB 传入 `--max-allowed-packet=64M`；自建数据库需同步设置。
+Compose 使用 `mongo:7.0` 以兼容 ARM64 39-bit VA 内核；首次启动由 `docker/mongo-init.js` 创建 `logshare` 应用用户（`readWrite` + `dbAdmin`）。启动后执行 `php scripts/init_mongodb.php` 初始化索引/TTL，`MongoCompactProcess` 负责周期压缩。MongoDB 8.0 且账号具备 `autoCompact` 权限时会自动启用，否则同样走 compact 进程。
 
 | 服务 | 说明 |
 | --- | --- |
 | `nginx` | OpenResty，监听 80 / 443，终止 TLS，加载 WAF 与统计 Lua，反向代理到 `hyperf:9501` |
 | `hyperf` | 应用本体，仅容器网络内暴露 9501 |
-| `mariadb` | MariaDB 11.8，首次启动执行 `docker/mariadb-init.sql`，开启 Event Scheduler |
-| `mariadb-events` | 一次性容器，导入 `docker/mariadb-events.sql` 安装分区与 `cleanup_expired_logs` 事件 |
+| `mongo` | MongoDB 7.0+，首次启动创建应用用户；TTL + 自动 compact |
 | `redis` | Redis 7.4，启用 `requirepass` |
 | `acme` | Certbot，定期续期证书 |
 
@@ -159,7 +156,7 @@ docker compose --env-file .env -f docker/compose.yaml build --no-cache hyperf
 docker compose --env-file .env -f docker/compose.yaml up -d --force-recreate hyperf
 ```
 
-镜像启动命令会先执行 `rm -rf /app/runtime/container`，避免沿用宿主机的陈旧注解扫描缓存。MariaDB / Redis 使用命名卷 `logshare-mariadb-data`、`logshare-redis-data`，删除卷会丢失全部日志与封禁状态，操作前需单独备份。
+镜像启动命令会先执行 `rm -rf /app/runtime/container`，避免沿用宿主机的陈旧注解扫描缓存，然后执行 `php scripts/init_mongodb.php` 初始化索引/TTL。MongoDB / Redis 使用命名卷 `logshare-mongo-data`、`logshare-redis-data`，删除卷会丢失全部日志与封禁状态，操作前需单独备份。
 
 ## 配置
 
@@ -186,6 +183,7 @@ Config::GetPath('urls.apiBaseUrl'); // 嵌套项
 | 配置段 | 作用 | 主要键 |
 | --- | --- | --- |
 | `storage` | 存储后端、保留时长与上传限制 | `storages`、`storageId`、`storageTime`、`uploadFiles` |
+| `mongo` | MongoDB 连接与磁盘回收 | `url`、`database`、`autoCompact`、`freeSpaceTargetMB`、`compactInterval`、连接超时 |
 | `cache` | Redis 缓存 | `cacheId`、`enabled`、`redis`、`ttl`、`maxSize` |
 | `id` | 短 ID 字符集与长度 | `characters`、`length` |
 | `filter` | 上传前置过滤器链 | `pre` |
@@ -199,6 +197,7 @@ Config::GetPath('urls.apiBaseUrl'); // 嵌套项
 
 - `storage.storageTime`：`604800` 秒（7 天）。
 - `storage.uploadFiles.maxFiles`：200；`maxTotalBytes`：20 MiB；`maxRequestBodyBytes`：32 MiB。
+- `mongo.compactInterval`：21,600 秒（6 小时），MongoDB 7.x / autoCompact 不可用时由 `MongoCompactProcess` 执行 `compact`。
 - `cache.ttl`：1,800 秒；`cache.maxSize`：5 MiB（全部文件合计）。
 - `id.length`：6；对外 ID 为 1 位存储标识编码 + 6 位随机字符，共 7 位。
 
@@ -211,19 +210,19 @@ Config::GetPath('urls.apiBaseUrl'); // 嵌套项
 | `APP_ENV` | `prod` 时关闭错误显示，并调整 Hyperf 日志级别 |
 | `APP_NAME` | Hyperf 应用名，默认 `logshare` |
 | `SCAN_CACHEABLE` | 是否缓存注解扫描结果 |
-| `DB_DRIVER` / `DB_HOST` / `DB_PORT` / `DB_DATABASE` / `DB_USERNAME` / `DB_PASSWORD` | MariaDB 连接 |
-| `DB_CHARSET` / `DB_COLLATION` / `DB_PREFIX` | 数据库字符集、排序规则与表前缀 |
+| `MONGODB_URI` / `MONGODB_DATABASE` | MongoDB 连接 URI 与数据库名 |
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_TIMEOUT` / `REDIS_PASSWORD` | 覆盖 `cache.redis` |
 | `STORAGE_TIME` | 覆盖 `storage.storageTime`（秒） |
 | `WAF_SNAPSHOT_PATH` | 指定 OpenLiteWaf 快照文件路径 |
 | `OPENLITEWAF_ADMIN_TOKEN` | WAF 运维端点令牌，Compose 中透传给 nginx |
-| `MARIADB_PASSWORD` / `MARIADB_ROOT_PASSWORD` / `REDIS_PASSWORD` | Compose 必填密码变量 |
+| `MONGO_ROOT_PASSWORD` / `MONGO_PASSWORD` / `REDIS_PASSWORD` | Compose 必填密码变量 |
 
 ### 配置校验
 
 启动阶段会检查：
 
 - `storage.storageTime > 0`。
+- `mongo.url` 必须是 `mongodb://` 或 `mongodb+srv://`，`mongo.database` 非空。
 - `cache.redis.host` 非空且端口大于 0。
 - `filter.pre` 中每个类存在且继承 `App\Filter\Filter`。
 - `storage.storages.*.class` 存在且实现 `App\Storage\StorageInterface`。
@@ -406,53 +405,50 @@ curl https://api.logshare.cn/v1/limits
 3. 校验 `files` 非空，检查客户端 IP 是否在配置、Redis、本地封禁文件或 WAF 快照中。
 4. `Log::put()` 对每个文件执行前置过滤链，识别 Minecraft 日志并尝试 SpinYarn 反混淆；反混淆失败按原文保留。
 5. 反混淆阶段识别出的第一份 Minecraft 日志可补全 `version` / `loader` 元数据；客户端显式提交的同名键优先。
-6. `MariaDbStorage::Put()` 计算 `xxh128` 指纹，并在事务中写入 `logs`、`log_metadata`、`log_files`；主存储成功后按大小决定是否写 Redis 缓存。去重命中时不写缓存。
+6. `MongoStorage::Put()` 计算 `xxh128` 指纹，先写 `pending` 父文档占住 ID，再写内容分块，最后把父文档置为 `ready`；主存储成功后按大小决定是否写 Redis 缓存。去重命中时不写缓存。
 7. 返回 200，响应包含 ID、文件列表、`filesUrl`、token 与 `deduplicated`。全文 Codex 分析不会在这里执行。
 
 ### 读取
 
 1. 解析 7 位 ID，还原存储标识与 6 位原始 ID。
 2. Redis 缓存键为 `log:<id>`；存在删除墓碑 `log:<id>:deleted` 时跳过缓存，避免已删日志在 TTL 内复活。
-3. 缓存未命中则从 `MariaDbStorage::Get()` 读取 token 哈希、元数据与文件集合，并在总大小不超过 `cache.maxSize` 时回填缓存。
+3. 缓存未命中则从 `MongoStorage::Get()` 读取 token 哈希、元数据与文件集合，并在总大小不超过 `cache.maxSize` 时回填缓存。
 4. 单文件直接返回内容；多文件返回 `200` + 文件列表。带文件名时按数据库 `name` 精确匹配。
-5. 读取文件或分析结果成功后调用 `Renew()`：父表 `created` 与两张子表的 `created` 同步更新，保证父子行落在同一分区；Redis 缓存 TTL 同步续期。元信息接口不续期。
+5. 读取文件或分析结果成功后调用 `Renew()`：父文档与内容分块的 `created` 同步更新，重置 TTL；Redis 缓存 TTL 同步续期。元信息接口不续期。
 
 ## 存储与过期
 
-### 表结构
+### 文档模型
 
-| 表 | 关键列 | 主键 |
+| 集合 | 字段 | 说明 |
 | --- | --- | --- |
-| `logs` | `id CHAR(6)`、`token VARCHAR(80)`、`source VARCHAR(64)`、`created INT UNSIGNED`、`fingerprint CHAR(32)` | `(id, created)` |
-| `log_files` | `log_id CHAR(6)`、`name VARCHAR(512)`、`data LONGTEXT`、`size INT UNSIGNED`、`created` | `(log_id, name, created)` |
-| `log_metadata` | `log_id CHAR(6)`、`key VARCHAR(64)`、`value TEXT`、`label VARCHAR(128)`、`visible TINYINT(1)`、`created` | `(log_id, key, created)` |
+| `logs` | `_id`、`status`、`token`、`source`、`fingerprint`、`created`、`metadata`、`files` | 父文档；不保存文件内容 |
+| `log_chunks` | `log_id`、`file_index`、`seq`、`data`、`created` | 文件内容分块；单块 8 MiB |
 
-三张表均使用 `PARTITION BY RANGE (created)`，并保留 `p_future VALUES LESS THAN (MAXVALUE)` 兜底分区。分区表不支持外键，级联删除由 `MariaDbStorage::Delete()` 显式完成，顺序为元数据、文件、父表。
+父文档先以 `status=pending` 占住 `_id`，分块写完后才切换为 `ready`。读取只认 `ready`，因此写入中断不会暴露半条日志；pending 文档和分块由 TTL 兜底回收。`metadata` 与文件描述嵌在父文档中，父文档体积很小；20 MiB 单文件会被拆成最多 3 个分块，规避 MongoDB 16 MiB BSON 文档上限。
+
+> `ext-mongodb` 基于 libmongoc，Swoole 的协程 hook 无法拦截其网络 I/O；大文件写入会同步占用当前 worker。当前版本使用直连实现，上线前应做并发压测；若阻塞成为瓶颈，再评估 RemoteObject/GoTask 方案。
 
 ### ID 与去重
 
-- `logs.id` 存 6 位原始 ID；对外 ID 为 7 位，首位由存储标识与随机字符共同编码，后 6 位是随机字符。当前只有 MariaDB 一个存储后端，`storageId` 为 `s`。
-- ID 生成后先做存在性预检，再在事务中插入；并发冲突时重新生成，最多重试 5 轮。
-- 指纹使用非加密哈希 `xxh128`，计算范围是 `source` 与按名称排序的文件集合；写入 `fingerprint` 列并建立索引。
-- 去重命中时返回最新的同指纹记录，保证剩余 TTL 最长。旧库缺少 `fingerprint` 列时查询失败会降级为不去重，不阻断上传。
+- 原始 ID 为 6 位，对外 ID 为 7 位；首位由存储标识与随机字符共同编码。当前存储后端为 MongoDB，`storageId` 为 `m`。
+- ID 生成后先做存在性预检；并发冲突时重新生成，最多重试 5 轮。
+- 指纹使用非加密哈希 `xxh128`，计算范围是 `source` 与按名称排序的文件集合；`logs` 上建立 `{fingerprint, status, created}` 索引。
+- 去重只匹配 `ready` 且未过期的文档，返回最新一条，保证剩余 TTL 最长。
 - 删除凭证为 64 位十六进制随机串；库中存 `sha256:<hex>`（71 字符），比较使用 `hash_equals()`。旧记录的无前缀裸哈希在验证成功后惰性补前缀。
 
-### 分区与回收
+### TTL 与磁盘回收
 
-- 分区布局在安装期一次铺好：历史分区覆盖 TTL 窗口，未来分区覆盖约两周；运行期只 `DROP PARTITION`，不做 `REORGANIZE`。
-- `LogPartitionManager` 只丢弃上界严格早于过期时刻的分区，从不丢弃 `p_future`。
-- 分区回收后仍会扫描兜底分区中的过期行并逐行删除，覆盖分区缺失或边界异常的退化场景。
-- 过期回收由 MariaDB Event `cleanup_expired_logs` 执行：先按天丢弃过期分区，再删除兜底分区中残留的过期行。`MariaDbStorage::CleanupExpired()` 提供等价的 PHP 侧入口，主要用于测试与手动运维。`storageTime` 修改后必须重新生成事件 SQL 并重装事件：
-
-```bash
-php scripts/sync_mariadb_events.php
-docker compose --env-file .env -f docker/compose.yaml restart mariadb-events
-```
+- `logs.created` 与 `log_chunks.created` 均建立 TTL 索引，`expireAfterSeconds = storageTime + 120` 秒宽限；逻辑过期仍按 `storageTime` 过滤，宽限只用于避免续期和 TTL 扫描竞争。
+- 读取文件或分析结果时，`Renew()` 先更新分块、再更新父文档的 `created`；TTL 监控约每 60 秒跑一轮，删除不是秒级精确。
+- `scripts/init_mongodb.php` 负责创建索引、用 `collMod` 同步 TTL，并尝试启用 MongoDB 8.0 `autoCompact`；Hyperf 容器启动时自动执行。
+- `autoCompact`（需 MongoDB 8.0 与相应权限）会持续压缩；不可用时由 `MongoCompactProcess` 按 `mongo.compactInterval` 周期性执行集合级 `compact`，把 TTL 删除后可回收的空间归还操作系统。
+- 修改 `storageTime` 后重启 Hyperf 即可让启动脚本更新 TTL。
 
 ### 结构升级
 
-- `php scripts/widen_token_column.php`：把 `logs.token` 扩到 `VARCHAR(80)`，幂等，只执行 `ALTER TABLE`，适合已有部署。
-- `php scripts/migrate_partitioned_storage.php --yes`：把旧结构重建为文件模型的分区结构，会 `DROP` 三张表，现有日志全部丢失。本版本不兼容旧 `logs.data` 正文，升级前必须清空旧数据。
+- 本版本不兼容旧 MariaDB 日志；旧 `s` 开头 ID 不可读，旧 `logshare-mariadb-data` 卷需自行备份后清理。
+- 没有旧日志迁移脚本；如需保留历史数据，应单独做 MariaDB → MongoDB ETL。
 
 ## 反混淆
 
@@ -477,7 +473,7 @@ python3 scripts/download_vanilla_mappings.py  # Mojang 官方映射，写入 map
 - 扩展未加载、版本非法、映射类型非法、初始化失败或反混淆返回异常时，均返回 `null`，调用方保留原文。
 - 初始化失败后，在没有可用旧句柄的情况下 60 秒内不再重试；成功句柄跨请求复用，`mappings_dir`、Redis URL 或缓存水位变化时重建，新句柄成功才替换旧句柄。
 - 只有 `spinyarn_init` 接受第 5 个参数时才传 Redis URL；旧版 4 参扩展自动退回按需解析（无缓存），避免 `ArgumentCountError` 导致进程生命周期内永久失效。
-- 反混淆在入库前完成，MariaDB 与 Redis 中保存的就是可读文本。
+- 反混淆在入库前完成，MongoDB 与 Redis 中保存的就是可读文本。
 
 ## 隐私与安全
 
@@ -546,7 +542,7 @@ php vendor/bin/pest --filter=Token
 - 在未加载 `ext-redis` 时把 `Tests\Mocks\RedisMock` 别名成 `Redis`。
 - 提供 `createTestLog()`、`createTestToken()` 等辅助函数。
 
-`tests/Unit` 以离线单元测试为主（涉及 MariaDB 的用例在数据库不可用时跳过）；`tests/Integration` 中的部分用例需要可用的 MariaDB / Redis。架构测试会检查：
+`tests/Unit` 以离线单元测试为主（涉及 MongoDB 的用例在数据库不可用时跳过）；`tests/Integration` 中的部分用例需要可用的 MongoDB / Redis。架构测试会检查：
 
 - 控制器不直接读取 `$_SERVER`、`$_GET`、`$_POST`。
 - 控制器不包含裸 SQL。
@@ -568,10 +564,7 @@ CI 位于 `.github/workflows/`：PHP 8.4 / 8.5 测试矩阵、PHPStan、架构�
 
 | 脚本 | 用途 |
 | --- | --- |
-| `scripts/sync_mariadb_events.php` | 按当前 `storageTime` 重新生成 `docker/mariadb-events.sql`（分区布局与清理事件） |
-| `scripts/widen_token_column.php` | 幂等扩展 `logs.token` 到 `VARCHAR(80)` |
-| `scripts/migrate_partitioned_storage.php --yes` | 重建分区表结构；会删除三张表，数据全部丢失 |
-| `scripts/ci_init_mariadb.sh` | CI 环境导入表结构与事件（使用 mariadb 客户端，剔除安装期分区调用） |
+| `scripts/init_mongodb.php` | 创建/同步 MongoDB 索引、TTL，并启用可用的磁盘回收能力 |
 | `scripts/ci_e2e_test.php` | 对真实实例执行端到端冒烟，支持 `--base-url` 与 `--waf-test` |
 | `scripts/test_online_apis.php` | 经 `127.0.0.1` 与指定 Host 探测线上接口 |
 | `scripts/test_endpoints_host.sh` | 用 curl 批量检查端点状态码 |
