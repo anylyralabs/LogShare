@@ -59,7 +59,6 @@ class EventQueueConsumer extends AbstractProcess
         $group = $cfg['group'];
         $this->lastBusyAt = time();
 
-        EventQueue::bootstrap();
 
         try {
             RedisStreams::xGroupCreate($stream, $group);

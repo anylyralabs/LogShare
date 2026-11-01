@@ -40,8 +40,6 @@ beforeEach(function () {
     $this->dataProp->setValue(null, $cfg);
     InMemoryStorage::reset();
 
-    EventQueue::resetListeners();
-
     if (!\Hyperf\Context\ApplicationContext::hasContainer()) {
         $container = Mockery::mock(\Psr\Container\ContainerInterface::class);
         $container->shouldReceive('has')->andReturn(true);
@@ -68,7 +66,6 @@ afterEach(function () {
     if (is_file($bansFile)) {
         @unlink($bansFile);
     }
-    EventQueue::resetListeners();
     $this->dataProp->setValue(null, $this->origData);
 });
 
@@ -96,47 +93,6 @@ test('QueueEvent context model handles lifecycle, serialization and propagation'
     expect($event->isPropagationStopped())->toBeFalse();
     $event->stopPropagation();
     expect($event->isPropagationStopped())->toBeTrue();
-});
-
-test('EventQueue registers listeners and executes according to priority', function () {
-    $executionLog = [];
-
-    EventQueue::register('test.ordered', function (QueueEvent $evt) use (&$executionLog) {
-        $executionLog[] = 'low_priority';
-        return true;
-    }, 10);
-
-    EventQueue::register('test.ordered', function (QueueEvent $evt) use (&$executionLog) {
-        $executionLog[] = 'high_priority';
-        return true;
-    }, 100);
-
-    $event = new QueueEvent('test.ordered', ['msg' => 'hello']);
-    $success = EventQueue::executePipeline($event);
-
-    expect($success)->toBeTrue();
-    expect($executionLog)->toBe(['high_priority', 'low_priority']);
-});
-
-test('EventQueue halts pipeline when stopPropagation is invoked', function () {
-    $executionLog = [];
-
-    EventQueue::register('test.stopped', function (QueueEvent $evt) use (&$executionLog) {
-        $executionLog[] = 'first';
-        $evt->stopPropagation();
-        return false;
-    }, 100);
-
-    EventQueue::register('test.stopped', function (QueueEvent $evt) use (&$executionLog) {
-        $executionLog[] = 'second_should_not_run';
-        return true;
-    }, 50);
-
-    $event = new QueueEvent('test.stopped', []);
-    $success = EventQueue::executePipeline($event);
-
-    expect($success)->toBeFalse();
-    expect($executionLog)->toBe(['first']);
 });
 
 test('SecurityAuditHandler passes compliant logs', function () {
@@ -238,15 +194,24 @@ test('LogController upload delegates audit and deobfuscation to EventQueue', fun
         ->and($log->getSource())->toBe('HMCL/3.5.0');
 });
 
-test('executePipeline returns false for blocked and failed events', function () {
-    EventQueue::register('test.outcome_blocked', function (QueueEvent $evt) {
-        $evt->stopPropagation();
-        return false;
-    }, 10);
-    EventQueue::register('test.outcome_failed', function (QueueEvent $evt) {
-        throw new \RuntimeException('handler boom');
-    }, 10);
+test('dispatch executes synchronously when queue is disabled', function () {
+    $cfg = $this->dataProp->getValue();
+    $cfg['eventQueue']['enabled'] = false;
+    $this->dataProp->setValue(null, $cfg);
 
-    expect(EventQueue::executePipeline(new QueueEvent('test.outcome_blocked', [])))->toBeFalse();
-    expect(EventQueue::executePipeline(new QueueEvent('test.outcome_failed', [])))->toBeFalse();
+    $log = new Log();
+    $id = $log->put('Log containing async_banned_keyword for sync fallback');
+    expect($id)->not->toBeNull();
+
+    $result = EventQueue::dispatch(EventQueue::EVENT_LOG_UPLOADED, [
+        'logId' => $id->get(),
+        'clientIp' => '127.0.0.1',
+    ]);
+
+    expect($result)->toBeFalse();
+    expect((new Log($id))->exists())->toBeFalse();
+});
+
+test('executePipeline rejects unknown events', function () {
+    expect(EventQueue::executePipeline(new QueueEvent('unknown.event', [])))->toBeFalse();
 });

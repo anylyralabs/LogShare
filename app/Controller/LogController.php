@@ -58,11 +58,14 @@ class LogController extends AbstractController
         // 重复派发只会让队列做无用功，还会重复审核已通过的日志。
         if (!$log->wasDeduplicated()) {
             // 统一异步队列事件调度：反混淆、关键词安全审核等后台排队异步执行
-            EventQueue::dispatch(EventQueue::EVENT_LOG_UPLOADED, [
+            $dispatched = EventQueue::dispatch(EventQueue::EVENT_LOG_UPLOADED, [
                 'logId' => $id->get(),
                 'clientIp' => $this->getClientRealIp(),
                 'source' => $source,
             ]);
+            if (!$dispatched) {
+                \App\Syslog::error('EventQueue', "Failed to process uploaded log {$id->get()} after persistence");
+            }
         }
 
         $urls = \App\Config::Get('urls');
