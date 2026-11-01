@@ -282,56 +282,6 @@ GET /v1/limits
 
 > **限流口径：** 限流在边缘完成：nginx `limit_req` 按 IP 30 r/s（burst 60），OpenLiteWaf 再叠加 10 秒窗口 240 次的 CC 限流。CC 超限返回 `429` 并带 `Retry-After`，`limit_req` 超限返回 `503`；两者都不封禁 IP（特征命中累计 3 次才会临时封禁）。应用层 `RateLimitMiddleware` 目前未注册，不参与实际限速。
 
-### 过滤器列表
-
-```
-GET /1/filters   （已弃用，保留兼容）
-GET /v1/filters
-```
-
-过滤器清单由 `filter.pre` 配置动态生成，始终与实际上链路一致；以下为默认配置的完整输出。
-
-**响应：**
-
-```json
-{
-    "success": true,
-    "filters": [
-        { "type": "trim", "data": null },
-        { "type": "limit-bytes", "data": { "limit": 10485760 } },
-        { "type": "limit-lines", "data": { "limit": 50000 } },
-        {
-            "type": "regex",
-            "data": {
-                "patterns": [
-                    { "pattern": "IPv4", "replacement": "**.**.**.**" },
-                    { "pattern": "IPv6", "replacement": "****:****:****:****:****:****:****:****" },
-                    { "pattern": "IPv6Short", "replacement": "****:****:****:****:****:****:****:****" },
-                    { "pattern": "Uuid", "replacement": "********-****-****-****-************" },
-                    { "pattern": "Xuid", "replacement": "xuid:\"****************\"" },
-                    { "pattern": "SessionToken", "replacement": "accessToken:\"********\"" },
-                    { "pattern": "ClientId", "replacement": "clientId:\"********\"" },
-                    { "pattern": "Coordinate", "replacement": "BlockPos(*****, *****, *****)" },
-                    { "pattern": "Username", "replacement": "C:\\Users\\********\\" },
-                    { "pattern": "AccessToken", "replacement": "accessToken:\"********\"" }
-                ]
-            }
-        }
-    ]
-}
-```
-
-### 速率错误测试
-
-```
-GET /1/errors/rate   （已弃用，保留兼容）
-GET /v1/errors/rate
-```
-
-始终返回 HTTP 429，用于测试限速错误处理。
-
----
-
 ## 通用响应格式
 
 **成功：**

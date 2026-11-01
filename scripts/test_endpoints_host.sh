@@ -35,7 +35,6 @@ test_one() {
 
 echo "=== 1. 公开端点测试 ==="
 test_one "GET" "/v1/limits" "" "" "存储上限"
-test_one "GET" "/v1/filters" "" "" "脱敏过滤器列表"
 test_one "GET" "/" "" "" "根目录索引"
 test_one "GET" "/security/stats" "" "" "WAF 统计"
 test_one "GET" "/stats/data" "" "" "访问统计数据"

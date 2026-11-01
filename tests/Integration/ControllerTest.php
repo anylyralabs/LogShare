@@ -17,15 +17,6 @@ class ControllerTest extends HttpTestCase
         $response->assertJsonFragment(['maxLines' => 50000]);
     }
 
-    public function testFiltersListsEnabledFilters(): void
-    {
-        $response = $this->get('/v1/filters');
-
-        $response->assertSuccessful();
-        $response->assertJsonFragment(['success' => true]);
-        $response->assertJsonStructure(['filters']);
-    }
-
     public function testLegacyPrefixRoutesToSameController(): void
     {
         $v1 = $this->get('/v1/limits');

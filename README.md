@@ -60,7 +60,7 @@ docker compose -f docker/compose.yaml up -d --build
 
 Compose 定义六个服务：**nginx**（OpenResty 反向代理，对外监听 80/443，承载 OpenLiteWaf 与 TLS 证书）；**acme**（证书续期）；**hyperf**（应用主进程，仅在内部网络监听 9501）；**mariadb**（数据存储，表结构由 `docker/mariadb-init.sql` 在首次创建卷时初始化）；**mariadb-events**（在数据库可用后创建过期日志清理 Event）；**redis**（缓存与限流）。
 
-OpenLiteWaf（`OpenLiteWaf/`）是 nginx 容器内的 OpenResty Lua 模块，在反向代理层做按 IP 的固定窗口 CC 限速（超限返回 429，不封 IP）与攻击特征检查（SQL 注入、XSS、路径穿越、命令执行、扫描器探测）；检查范围包括 URL 原始与解码形态、请求路径、User-Agent 和请求体（接收任意用户文本的日志、分析、遥测与管理端点豁免请求体扫描），特征命中返回 403 并按窗口累计次数封禁 IP（默认累计 3 次才封，避免一次误判让该来源十分钟内在所有端点不可用）。统计页 `https://<域名>/security`（JSON 汇总：`/security/stats`，攻击日志分页：`/security/logs`，现存封禁与封禁原因：`/security/bans`）展示内存计数与脱敏后的攻击记录，含命中的规则序号与匹配对象；计数与封禁都会快照到挂载目录，重启后恢复（即“重启不是解封手段”）。误封的运行时解封走特权端点 `POST /security/unban`，令牌为 `.env` 中的 `OPENLITEWAF_ADMIN_TOKEN`，未配置时该端点一律 404。工作方式、配置与规则编写见 `OpenLiteWaf/README.md`；改动 Lua 文件后执行 `docker compose -f docker/compose.yaml restart nginx` 生效（`git pull` 只更新文件，不重载不生效；容器内 `nginx -s reload` 在本部署不可靠）。应用层安全由 Hyperf 负责，参数化查询、输出转义与脱敏过滤链不依赖本模块。
+OpenLiteWaf（`OpenLiteWaf/`）是 nginx 容器内的 OpenResty Lua 模块，在反向代理层做按 IP 的固定窗口 CC 限速（超限返回 429，不封 IP）与攻击特征检查（SQL 注入、XSS、路径穿越、命令执行、扫描器探测）；检查范围包括 URL 原始与解码形态、请求路径、User-Agent 和请求体（接收任意用户文本的日志与分析端点豁免请求体扫描；WAF 子模块中的 telemetry/admin 旧前缀待独立仓库清理），特征命中返回 403 并按窗口累计次数封禁 IP（默认累计 3 次才封，避免一次误判让该来源十分钟内在所有端点不可用）。统计页 `https://<域名>/security`（JSON 汇总：`/security/stats`，攻击日志分页：`/security/logs`，现存封禁与封禁原因：`/security/bans`）展示内存计数与脱敏后的攻击记录，含命中的规则序号与匹配对象；计数与封禁都会快照到挂载目录，重启后恢复（即“重启不是解封手段”）。误封的运行时解封走特权端点 `POST /security/unban`，令牌为 `.env` 中的 `OPENLITEWAF_ADMIN_TOKEN`，未配置时该端点一律 404。工作方式、配置与规则编写见 `OpenLiteWaf/README.md`；改动 Lua 文件后执行 `docker compose -f docker/compose.yaml restart nginx` 生效（`git pull` 只更新文件，不重载不生效；容器内 `nginx -s reload` 在本部署不可靠）。应用层安全由 Hyperf 负责，参数化查询、输出转义与脱敏过滤链不依赖本模块。
 
 ### HTTPS 证书
 
@@ -113,10 +113,7 @@ GET    /v1/raw/{id}/{filename}                   获取指定子文件（支持�
 GET    /1/log/{id} | /v1/log/{id}                获取日志元信息与文件列表
 GET    /1/insights/{id} | /v1/insights/{id}      获取 Codex 结构化分析结果
 POST   /1/analyse | /v1/analyse                  直接分析日志内容（不存储）
-POST   /v1/telemetry/report                      上报客户端与启动器遥测指标
 GET    /1/limits | /v1/limits                    获取上传限制与存储 TTL
-GET    /1/errors/rate | /v1/errors/rate          限流错误测试端点（始终返回 429）
-GET    /1/filters | /v1/filters                  获取当前启用的过滤器列表
 ```
 
 上传接口接受 `application/x-www-form-urlencoded` 与 `application/json`，支持 gzip / deflate / brotli 压缩请求体；`files` 数组可附加多个文件，`.zip` 压缩包自动展开并保留内部相对路径，展开后每个文件独立经过脱敏过滤链。客户端接入时建议同时上传「游戏主日志 + 崩溃报告 + 启动器日志」并注明 `source` 来源标识。上传响应中的 `token` 是删除该日志的唯一凭证；命中内容去重时响应会带 `deduplicated: true`，此时返回的 `token` 未写入存储、不能用于删除，请使用首次上传保存的凭证。Codex 结构化解析结果通过 `/v1/insights/{id}` 返回；AI 智能诊断由外部服务提供，本仓库不再暴露 `/v1/ai/*` 端点。
@@ -141,7 +138,6 @@ app/                      核心类库（App\ 命名空间）
 ├── ApiResponse.php       统一响应结构封装
 ├── Storage/              持久化存储后端（MariaDbStorage）
 ├── System/               系统核心服务（SecurityService、LogPartitionManager）
-├── Telemetry/            客户端遥测统计服务
 ├── ApiError.php          API 业务异常（ApiExceptionHandler 统一渲染）
 ├── Config.php            配置加载器与环境变量覆盖
 ├── ContentParser.php     请求正文与启动器特征识别

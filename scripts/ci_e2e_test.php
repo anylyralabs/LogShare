@@ -101,17 +101,6 @@ runCheck('GET /v1/limits 存储限制与大小配置', function () use ($baseUrl
     }
 });
 
-runCheck('GET /v1/filters 过滤器链路检查', function () use ($baseUrl) {
-    $res = httpRequest('GET', "{$baseUrl}/v1/filters");
-    if ($res['status'] !== 200) {
-        throw new RuntimeException("状态码非 200: {$res['status']}");
-    }
-    $json = json_decode($res['body'], true);
-    if (!isset($json['filters']) || !is_array($json['filters'])) {
-        throw new RuntimeException("响应中缺少 filters 列表: {$res['body']}");
-    }
-});
-
 runCheck('GET / 根路径 API 目录检查', function () use ($baseUrl) {
     $res = httpRequest('GET', "{$baseUrl}/");
     if ($res['status'] !== 200) {
@@ -188,17 +177,6 @@ runCheck('GET /v1/raw/{id}/{filename} 获取指定附加文件内容', function 
     }
 });
 
-runCheck('GET /v1/errors/rate 速率超限错误端点检查', function () use ($baseUrl) {
-    $res = httpRequest('GET', "{$baseUrl}/v1/errors/rate");
-    if ($res['status'] !== 429) {
-        throw new RuntimeException("速率超限端点应返回 429，实际状态: {$res['status']}");
-    }
-    $json = json_decode($res['body'], true);
-    if (!isset($json['error']) || !str_contains($json['error'], 'rate limit')) {
-        throw new RuntimeException("速率超限响应文本不符合预期: {$res['body']}");
-    }
-});
-
 runCheck('GET /v1/insights/{id} Codex 日志特征解析', function () use ($baseUrl, &$logId) {
     $res = httpRequest('GET', "{$baseUrl}/v1/insights/{$logId}");
     if ($res['status'] !== 200) {
@@ -221,35 +199,6 @@ runCheck('POST /v1/analyse 直发日志分析', function () use ($baseUrl) {
     $json = json_decode($res['body'], true);
     if (!is_array($json)) {
         throw new RuntimeException("分析响应非合法结构");
-    }
-});
-
-runCheck('POST /v1/telemetry/report 上报性能遥测数据', function () use ($baseUrl) {
-    $payload = (string) json_encode([
-        'items' => [
-            [
-                'type' => 'api',
-                'endpoint' => '/v1/log',
-                'method' => 'POST',
-                'duration' => 15.5,
-                'status' => 200,
-                'timestamp' => time(),
-            ],
-            [
-                'type' => 'web',
-                'page' => '/log/view',
-                'duration' => 24.2,
-                'timestamp' => time(),
-            ],
-        ],
-    ]);
-    $res = httpRequest('POST', "{$baseUrl}/v1/telemetry/report", ['Content-Type' => 'application/json'], $payload);
-    if ($res['status'] !== 200) {
-        throw new RuntimeException("遥测上报失败: {$res['status']}");
-    }
-    $json = json_decode($res['body'], true);
-    if (empty($json['success']) || ($json['processed'] ?? 0) < 1) {
-        throw new RuntimeException("遥测上报响应不合法: {$res['body']}");
     }
 });
 
@@ -319,22 +268,6 @@ if ($testWaf) {
         $res = httpRequest('POST', "{$baseUrl}/v1/log", ['Content-Type' => 'application/json'], $payload);
         if ($res['status'] !== 200) {
             throw new RuntimeException("OpenLiteWaf 误拦截正常日志上传，状态: {$res['status']}: {$res['body']}");
-        }
-    });
-
-    runCheck('OpenLiteWaf 遥测上报放行（body 含日志文件名不得判探测）', function () use ($baseUrl) {
-        // 回归 2026-09 线上误封：前端遥测 SDK 拦截 fetch/XHR 后把每个请求 URL 原样写进
-        // endpoint 上报，探针扩展名规则曾在 body 里命中 main.log 而封掉整个客户端 IP
-        $payload = (string) json_encode([
-            'items' => [
-                ['type' => 'api', 'endpoint' => 'https://logshare.cn/v1/raw/qKSA1QU/main.log', 'method' => 'GET', 'duration' => 8.1, 'status' => 200],
-                ['type' => 'error', 'message' => 'cannot read config.yml', 'stack' => 'at read (/data/user/0/cn.logshare/files/latest.log:1)', 'url' => 'https://logshare.cn/log/qKSA1QU'],
-                ['type' => 'web_vitals', 'name' => 'LCP', 'value' => 2600, 'rating' => 'good'],
-            ],
-        ]);
-        $res = httpRequest('POST', "{$baseUrl}/v1/telemetry/report", ['Content-Type' => 'application/json'], $payload);
-        if ($res['status'] === 403 || $res['status'] === 429) {
-            throw new RuntimeException("OpenLiteWaf 误拦截遥测上报，状态: {$res['status']}");
         }
     });
 

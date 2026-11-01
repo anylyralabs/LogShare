@@ -53,9 +53,8 @@ php vendor/bin/pest --filter=TestName
 - JSON / 结构化输入一律用 `$this->getParsedBody()`；它兼容 `text/plain` 等非 JSON Content-Type 的裸 JSON。预期业务失败抛 `App\ApiError`，由 `ApiExceptionHandler` 统一渲染。
 - 仓库不提供应用层管理接口；安全能力由上传前置过滤与异步审核承担。旧版 `ai` / `github` 配置段在 `Config::load()` 中丢弃，避免遗留密钥泄露。
 - 违规关键词 / 正则使用 AES-256-GCM 密文落盘（`enc:v1:...`），密钥来自 `SECURITY_ENCRYPTION_KEY` 或 `runtime/.security_secret`（0600）；不要改成明文存储，也不要吞掉解密失败异常。
-- 公开遥测 `POST /v1/telemetry/report` 无鉴权：端点路径截断到 200 字符，单日端点键上限 2000（溢出归并 `:other`），`recordBatch()` 在 Redis 不可用时返回 0 而不是谎报已处理。
 - 内容去重命中时 `Log::put()` **不得**写缓存（`StorageInterface::Put()` 通过 `&$created` 告知是否新建），否则第二个上传者会拿到删除凭证；响应带 `deduplicated: true`。
-- `Config::Get()` 只接受顶层段名，点路径会抛异常（用 `Config::GetPath('a.b')`）；新鲜度检查按协程 Context 每请求一次，不要改回时间窗口。
+- `Config::Get()` 只接受顶层段名，点路径会抛异常（用 `Config::GetPath('a.b')`）。
 - 客户端真实 IP 只信 `security.trustedProxies` / `rateLimit.trustedProxies`（IPv4 与 IPv6 CIDR 都支持）；`X-Forwarded-For` 从右往左剥离受信代理。`RateLimitMiddleware` 目前未注册（中间件链上只有 `CorsMiddleware`），且 Redis 故障路径为 503 fail-closed，启用前先确认。
 - 改路由或响应必须同步 `API.md`、`openapi.yaml`、`postman_collection.json`。
 
@@ -90,10 +89,10 @@ php vendor/bin/pest --filter=TestName
 ## 边缘 WAF / 统计（submodule）
 
 - WAF 入口在 `docker/nginx/default.conf` 的 `access_by_lua_file` 等；http 级指令在 `OpenLiteWaf/nginx/nginx.conf`（shared dict、`init_by_lua`）。容器镜像是 `openresty/openresty:1.27.1.2-alpine`，不是 stock nginx。
-- 路径形态的探测规则（`.php`、`/.git/`、敏感文件扩展名）必须限定 `uri` / `path`；放宽到 body / UA 会封正常客户端。接收任意文本的端点做 body 豁免：log、analyse、telemetry、admin（URI / UA 仍匹配）。body 只扫前 64KB，`Content-Length > 2MB` 跳过（chunked 仍扫）；`/{version}/raw/{id}/{filename}` 通过 `is_raw_file_request` 绕过扩展名规则。
+- 路径形态的探测规则（`.php`、`/.git/`、敏感文件扩展名）必须限定 `uri` / `path`；放宽到 body / UA 会封正常客户端。接收任意文本的端点做 body 豁免：log、analyse（WAF 子模块仍保留已下线的 telemetry/admin 前缀，待其独立仓库清理；URI / UA 仍匹配）。body 只扫前 64KB，`Content-Length > 2MB` 跳过（chunked 仍扫）；`/{version}/raw/{id}/{filename}` 通过 `is_raw_file_request` 绕过扩展名规则。
 - CC 超限返回 429 + `Retry-After` 且不封 IP；特征命中返回 403，并按 `sig_strikes`（默认 3）累计才封。CC 阈值必须低于 nginx `limit_req`（30r/s），否则请求先被 503。
 - 封禁与计数 60s 快照，重启后恢复；`docker exec logshare-nginx nginx -s reload` 在本部署不可靠，改 Lua 后用 `docker restart logshare-nginx`。重启不能清误封，走带 `OPENLITEWAF_ADMIN_TOKEN` 的 `POST /security/unban`（未配置 token 或长度不足时 404 fail-closed）。
-- `OpenLiteStats` 记录通过请求，排除 `/security`、`/stats`、`/telemetry`、`/admin`；排除按路径段边界匹配，空 prefix 会关闭全站统计。热门端点聚合时模板化 ID，IP 脱敏，`OPTIONS` 不计。
+- `OpenLiteStats` 记录通过请求，排除 `/security`、`/stats`（`/telemetry`、`/admin` 是已下线端点的历史排除项，待在子模块清理）；排除按路径段边界匹配，空 prefix 会关闭全站统计。热门端点聚合时模板化 ID，IP 脱敏，`OPTIONS` 不计。
 
 ## CI / 发布
 

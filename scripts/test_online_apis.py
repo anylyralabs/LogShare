@@ -32,7 +32,6 @@ def request(method, path, headers=None, body=None):
 
 endpoints = [
     ("GET", "/v1/limits", None, None, "公开存储限制与规格"),
-    ("GET", "/v1/filters", None, None, "公开过滤器列表"),
     ("GET", "/", None, None, "API 根路径索引"),
     ("GET", "/security/stats", None, None, "OpenLiteWaf 统计概览"),
     ("GET", "/stats/data", None, None, "OpenLiteStats 访问分析数据"),

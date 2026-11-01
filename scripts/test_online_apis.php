@@ -50,7 +50,6 @@ function request(string $method, string $path, array $headers = [], ?string $bod
 $endpoints = [
     // 1. 公开端点
     ['GET', '/v1/limits', [], null, '公开存储与格式上限'],
-    ['GET', '/v1/filters', [], null, '公开过滤器列表'],
     ['GET', '/', [], null, 'API 根目录索引'],
     ['GET', '/security/stats', [], null, 'WAF 统计公开概览'],
     ['GET', '/stats/data', [], null, 'OpenLiteStats 访问统计数据'],

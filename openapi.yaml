@@ -43,7 +43,7 @@ tags:
   - name: Analysis
     description: Log analysis and insights
   - name: Meta
-    description: Limits, filters, rate limit status
+    description: Upload limits
 paths:
   /:
     get:
@@ -65,9 +65,7 @@ paths:
                   - "POST /1/log"
                   - "DELETE /1/log/{id}"
                   - "POST /1/analyse"
-                  - "GET /1/errors/rate"
                   - "GET /1/limits"
-                  - "GET /1/filters"
                   - "GET /1/raw/{id}"
                   - "GET /1/insights/{id}"
   /1/log:
@@ -799,40 +797,6 @@ paths:
                 storageTime: 604800
         '429':
           $ref: '#/components/responses/RateLimited'
-  /v1/telemetry/report:
-    post:
-      tags: [Meta]
-      summary: Report client telemetry metrics
-      description: |
-        Accepts a batch of client-side telemetry items (`items` array), a bare
-        JSON array, or a single item object. Each item is one of `api`,
-        `web_vitals` or `error`. Batches are capped at 50 items per request;
-        endpoint paths are truncated to 200 chars and the endpoint leaderboard
-        caps at 2000 distinct keys per day (overflow is folded into `:other`).
-      operationId: reportTelemetry
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                items:
-                  type: array
-                  maxItems: 50
-                  items:
-                    type: object
-                    additionalProperties: true
-      responses:
-        '200':
-          description: Metrics recorded
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success: { type: boolean }
-                  processed: { type: integer }
   /v1/limits:
     get:
       tags: [Meta]
@@ -851,139 +815,6 @@ paths:
                 maxLength: 10485760
                 maxLines: 50000
                 storageTime: 604800
-        '429':
-          $ref: '#/components/responses/RateLimited'
-  /1/filters:
-    get:
-      tags: [Meta]
-      summary: List active pre-filters
-      description: |
-        Returns the ordered list of active pre-filters (type + config).
-        Derived from the `filter.pre` config, so it always reflects what is actually applied.
-        
-        (Deprecated; use /v1/filters instead)
-      operationId: getFilters
-      deprecated: true
-      responses:
-        '200':
-          description: Filter list
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/FiltersResponse'
-              example:
-                success: true
-                filters:
-                  - type: trim
-                    data: null
-                  - type: limit-bytes
-                    data:
-                      limit: 10485760
-                  - type: limit-lines
-                    data:
-                      limit: 50000
-                  - type: regex
-                    data:
-                      patterns:
-                        - pattern: IPv4
-                          replacement: "**.**.**.**"
-                        - pattern: IPv6
-                          replacement: "****:****:****:****:****:****:****:****"
-                        - pattern: IPv6Short
-                          replacement: "****:****:****:****:****:****:****:****"
-                        - pattern: Uuid
-                          replacement: "********-****-****-****-************"
-                        - pattern: Xuid
-                          replacement: "xuid:\"****************\""
-                        - pattern: SessionToken
-                          replacement: "accessToken:\"********\""
-                        - pattern: ClientId
-                          replacement: "clientId:\"********\""
-                        - pattern: Coordinate
-                          replacement: "BlockPos(*****, *****, *****)"
-                        - pattern: Username
-                          replacement: "C:\\Users\\********\\"
-                        - pattern: AccessToken
-                          replacement: "accessToken:\"********\""
-        '429':
-          $ref: '#/components/responses/RateLimited'
-  /v1/filters:
-    get:
-      tags: [Meta]
-      summary: List active pre-filters
-      description: |
-        Returns the ordered list of active pre-filters (type + config).
-        Derived from the `filter.pre` config, so it always reflects what is actually applied.
-      operationId: getFiltersV1
-      responses:
-        '200':
-          description: Filter list
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/FiltersResponse'
-              example:
-                success: true
-                filters:
-                  - type: trim
-                    data: null
-                  - type: limit-bytes
-                    data:
-                      limit: 10485760
-                  - type: limit-lines
-                    data:
-                      limit: 50000
-                  - type: regex
-                    data:
-                      patterns:
-                        - pattern: IPv4
-                          replacement: "**.**.**.**"
-                        - pattern: IPv6
-                          replacement: "****:****:****:****:****:****:****:****"
-                        - pattern: IPv6Short
-                          replacement: "****:****:****:****:****:****:****:****"
-                        - pattern: Uuid
-                          replacement: "********-****-****-****-************"
-                        - pattern: Xuid
-                          replacement: "xuid:\"****************\""
-                        - pattern: SessionToken
-                          replacement: "accessToken:\"********\""
-                        - pattern: ClientId
-                          replacement: "clientId:\"********\""
-                        - pattern: Coordinate
-                          replacement: "BlockPos(*****, *****, *****)"
-                        - pattern: Username
-                          replacement: "C:\\Users\\********\\"
-                        - pattern: AccessToken
-                          replacement: "accessToken:\"********\""
-        '429':
-          $ref: '#/components/responses/RateLimited'
-  /1/errors/rate:
-    get:
-      tags: [Meta]
-      summary: Rate-limit error probe
-      description: |
-        Always returns `429 Too Many Requests` with a `Retry-After` header.
-        Present only for backward compatibility.
-
-        (Deprecated; use /v1/errors/rate instead)
-      operationId: getRateLimitStatus
-      deprecated: true
-      responses:
-        '429':
-          $ref: '#/components/responses/RateLimited'
-  /v1/errors/rate:
-    get:
-      tags: [Meta]
-      summary: Rate-limit error probe
-      description: |
-        Always returns `429 Too Many Requests` with a `Retry-After` header.
-        It exists so clients can exercise their rate-limit error handling; it
-        does **not** report counters. Actual limits are enforced at the edge:
-        nginx `limit_req` (30 r/s, burst 60) plus OpenLiteWaf CC defense
-        (240 requests / 10 s window).
-      operationId: getRateLimitStatusV1
-      responses:
         '429':
           $ref: '#/components/responses/RateLimited'
 components:
@@ -1119,22 +950,6 @@ components:
           type: integer
           description: TTL in seconds
           example: 604800
-    FiltersResponse:
-      type: object
-      required: [success, filters]
-      properties:
-        success:
-          type: boolean
-        filters:
-          type: array
-          items:
-            type: object
-            required: [type, data]
-            properties:
-              type:
-                type: string
-              data:
-                nullable: true
     MetadataEntry:
       type: object
       required: [key, value]

@@ -5,12 +5,10 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use App\ApiError;
-use App\Controller\FiltersController;
 use App\Controller\IndexController;
 use App\Controller\InsightsController;
 use App\Controller\LimitsController;
 use App\Controller\LogMetaController;
-use App\Controller\RateErrorController;
 use App\Controller\RawController;
 use App\Data\Token;
 use App\Log;
@@ -70,16 +68,6 @@ test('LimitsController returns storage limits json', function () {
     expect($body['maxLines'])->toBe(50000);
 });
 
-test('FiltersController returns active filter chain', function () {
-    $controller = instantiateController(FiltersController::class);
-    $resp = $controller->filters();
-
-    expect($resp->getStatusCode())->toBe(200);
-    $body = json_decode((string) $resp->getBody(), true);
-    expect($body['success'])->toBeTrue();
-    expect($body['filters'])->toBeArray();
-});
-
 test('IndexController returns all registered public endpoints', function () {
     $controller = instantiateController(IndexController::class);
     $resp = $controller->index();
@@ -91,16 +79,6 @@ test('IndexController returns all registered public endpoints', function () {
     expect($endpoints)->toContain('GET /v1/limits');
     expect($endpoints)->toContain('POST /v1/log');
     expect($endpoints)->toContain('GET /1/limits');
-});
-
-test('RateErrorController returns 429 response', function () {
-    $controller = instantiateController(RateErrorController::class);
-    $resp = $controller->rate();
-
-    expect($resp->getStatusCode())->toBe(429);
-    $body = json_decode((string) $resp->getBody(), true);
-    expect($body['success'])->toBeFalse();
-    expect($body['error'])->toContain('exceeded the rate limit');
 });
 
 test('RawController serves raw log and files or throws 404', function () {
@@ -249,34 +227,6 @@ test('LogController creates log and enforces token on delete', function () {
     expect($againResp->getStatusCode())->toBe(400);
     $againBody = json_decode((string) $againResp->getBody(), true);
     expect($againBody['errors'][0]['code'])->toBe(404);
-});
-
-test('TelemetryController accepts batch and single reports', function () {
-    // 遥测聚合依赖 Redis；注入 mock 让用例不依赖本机是否启动 redis-server
-    \App\Client\RedisClient::setTestConnection(new \Tests\Mocks\RedisMock());
-
-    $mockReq = Mockery::mock(RequestInterface::class);
-    $mockReq->shouldReceive('getParsedBody')->andReturn([
-        'items' => [
-            [
-                'type' => 'api',
-                'endpoint' => '/v1/limits',
-                'method' => 'GET',
-                'duration' => 10.0,
-                'status' => 200,
-                'timestamp' => time(),
-            ],
-        ],
-    ]);
-
-    $controller = instantiateController(\App\Controller\TelemetryController::class, $mockReq);
-    $resp = $controller->report();
-    expect($resp->getStatusCode())->toBe(200);
-    $body = json_decode((string) $resp->getBody(), true);
-    expect($body['success'])->toBeTrue();
-    expect($body['processed'])->toBe(1);
-
-    \App\Client\RedisClient::setTestConnection(null);
 });
 
 test('AnalyseController parses content and returns analysis json', function () {

@@ -25,30 +25,6 @@ class ApiTest extends HttpTestCase
         $response->assertJsonFragment(['maxLines' => 50000]);
     }
 
-    public function testFiltersListsActiveFilterChain(): void
-    {
-        $response = $this->get('/v1/filters');
-
-        $response->assertSuccessful();
-        $response->assertJsonFragment(['success' => true]);
-        $filters = $response->json('filters');
-        $this->assertIsArray($filters);
-        $this->assertNotEmpty($filters);
-
-        // 过滤器清单由 filter.pre 配置动态生成：Limit* 必在且携带配置值
-        $types = array_column($filters, 'type');
-        $this->assertContains('trim', $types);
-        $this->assertContains('limit-bytes', $types);
-        $this->assertContains('limit-lines', $types);
-        $this->assertContains('regex', $types);
-
-        foreach ($filters as $filter) {
-            if ($filter['type'] === 'limit-bytes') {
-                $this->assertSame(10485760, $filter['data']['limit']);
-            }
-        }
-    }
-
     public function testLegacyPrefixRoutesToSameController(): void
     {
         $v1 = $this->get('/v1/limits');
@@ -64,14 +40,6 @@ class ApiTest extends HttpTestCase
         $response = $this->get('/v1/does-not-exist');
 
         $response->assertStatus(404);
-    }
-
-    public function testRateErrorEndpointReturns429(): void
-    {
-        $response = $this->get('/v1/errors/rate');
-
-        $response->assertStatus(429);
-        $response->assertJsonFragment(['success' => false]);
     }
 
     public function testPostLogWithoutContentReturns400(): void
@@ -157,38 +125,4 @@ class ApiTest extends HttpTestCase
         Db::table('log_files')->where('log_id', substr($id, 1))->delete();
     }
 
-    public function testTelemetryReportEndpointAcceptsMetrics(): void
-    {
-        // 遥测聚合写入 Redis；本机未启动 redis-server 时注入 mock，
-        // 避免同一个用例在不同开发机上一红一绿。
-        \App\Client\RedisClient::setTestConnection(new \Tests\Mocks\RedisMock());
-
-        $payload = [
-            'items' => [
-                [
-                    'type' => 'api',
-                    'endpoint' => '/v1/limits',
-                    'method' => 'GET',
-                    'duration' => 12.5,
-                    'status' => 200,
-                    'timestamp' => time(),
-                ],
-                [
-                    'type' => 'web_vitals',
-                    'name' => 'FCP',
-                    'value' => 600,
-                    'rating' => 'good',
-                    'timestamp' => time(),
-                ],
-            ],
-        ];
-
-        $response = $this->post('/v1/telemetry/report', $payload);
-        $response->assertSuccessful();
-        $response->assertJsonFragment(['success' => true]);
-        $this->assertSame(2, $response->json('processed'));
-
-        \App\Client\RedisClient::setTestConnection(null);
-    }
 }
-
