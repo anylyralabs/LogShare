@@ -97,11 +97,11 @@ php vendor/bin/pest --filter=TestName
 
 ## CI / 发布
 
-- CI 在 CNB：`.cnb.yml` include `.cnb/{ci,docker-e2e,release}.yml`。`ci` 跑 Pest + 覆盖率、composer validate、PHPStan、架构测试、Swoole 启动冒烟；`docker-e2e` 构建生产镜像并跑全栈 E2E；`release` 由 `[Build]` 提交触发。
+- CI 主入口在 GitHub Actions：`.github/workflows/` 跑 Pest、composer、PHPStan、架构测试、Swoole 冒烟与 Docker E2E；`.cnb/` 配置保留为可选/历史流水线。
 - 平台坑：子配置按「分支 + 事件」合并，整条流水线数组不能用 `!reference`（会静默产出空流水线）；`script` 由 sh/dash 执行，用 `set -eu`，不要用 `pipefail`；`services` 只有 docker/vscode，MariaDB/Redis 需自行 `docker run`，且 dind 与流水线容器网络不通（用同一自定义网络 + 容器名）；`docker:27-cli` 没有 curl/openssl；Stage 的 `if` 不继承，门控写在真正执行任务的 Stage 上。
 - `docker.build` 指定的 Dockerfile 由 CNB 预构建并缓存；Stage 里不要再跑一次 `docker build`（会因缓存包冲突立即失败），用 `${CNB_PIPELINE_DOCKER_IMAGE}` 取已构建镜像。
 - 覆盖率先 `--coverage-clover` 再用 `scripts/clover_to_lcov.php` 转 LCOV；`mariadb-events.sql` 含 `DELIMITER` 存储过程，只能由 mysql/mariadb 客户端导入。
-- `.github/workflows/` 仍在：CNB 会把 main 同步回 GitHub 镜像仓库，Actions 仍会触发；`scripts/ci_init_mariadb.sh` 刻意剔除 `CALL logshare_install_partitions()` 以匹配既有分区测试，改动前先读脚本注释。
+- 远端已迁移到 GitHub，`.github/workflows/` 直接触发；`scripts/ci_init_mariadb.sh` 刻意剔除 `CALL logshare_install_partitions()` 以匹配既有分区测试，改动前先读脚本注释。
 - 版本单一来源是 `app/Version.php`。发版时改 `CHANGELOG.md` 首条并同步 `README.md` / `openapi.yaml`，提交信息以 `[Build]` 开头；tag 与 Release notes 取自 CHANGELOG 首条。
 - submodule 先在自身仓库提交推送，再回主仓更新指针（沿用 `chore: 更新 OpenLiteWaf submodule 指针（…）`）。
 
