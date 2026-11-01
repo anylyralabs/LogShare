@@ -2,39 +2,45 @@
 
 ## 1.8.4 — 2026-11-01
 
-第四期 Code Review 修复（`CRCLASH.md`）：5 项严重、21 项一般、16 项建议全部处理。
+第四期 Code Review 修复与 API 精简：5 项严重、21 项一般、16 项建议全部处理；同时移除应用层 Admin API、客户端遥测、过滤器/限流测试端点、文件系统存储后端与动态配置热更新。
 
 ### 安全
 
 - **去重命中时不再覆盖删除凭证**：`StorageInterface::Put()` 新增 `&$created` 出参，命中内容指纹时 `Log::put()` 跳过缓存写入；此前第二个上传者可用自己的 token 删除他人日志（IDOR）。
 - **删除 token 一律只比较哈希**：`Token` 改用 `fromHash()` 构造，存储格式为 `sha256:<hex>`，库里的值本身不再能作为凭证；旧记录在验证成功后惰性补前缀。
-- **默认凭据下线**：示例配置的 `admin.token` 置空，Compose 的 `ADMIN_ENABLED` 默认改为 `false`，`Config::validate()` 拒绝占位串与 <32 字符的 token。
 - **配置类名校验**：`filter.pre`、`storage.storages.*.class`、`cache.cacheId` 必须是存在且实现对应接口的类，避免一次误配置把上传打成 500。
-- **管理端 CORS 收紧**：`/admin` 路径只回显 `urls.corsOrigins` 白名单，公开端仍保持通配。
-- **加密失败 fail-closed**：`SecurityService::encryptSecret()` 失败时抛异常，绝不再静默落明文。
 - **IPv6 CIDR 支持**：`SecurityService::ipInCidr()` 覆盖 IPv6 网段，修复反代场景下按代理 IP 聚合封禁/限流。
 - 依赖升级修复 `symfony/http-foundation` 的 ReDoS（CVE-2026-108082）。
 
 ### 修复
 
 - **同名附件 / 重复元数据键不再打成 500**：`UploadParser` 自动改名为 `name (2)`，`MetadataEntry::allFromArray()` 与 `MariaDbStorage` 双重去重。
-- **读路径不再执行分区 DDL**：`Log::renew()` 移除 1% 概率触发的 `ALTER TABLE`，回收只走事件与 Admin 端点；`dropPartition()` 只统计真正成功的分区。
+- **读路径不再执行分区 DDL**：`Log::renew()` 移除 1% 概率触发的 `ALTER TABLE`，回收只走 MariaDB Event；`dropPartition()` 只统计真正成功的分区。
 - **`MariaDbStorage::Update()` 不再谎报成功**：记录不存在时返回 `false`。
-- **`FilesystemStorage::Put()` 增加 ID 分配重试上限**，目录不可写时不再死循环。
 - **`source` 按字符截断**（`mb_strcut`），中文启动器名不再被切成非法 UTF-8。
 - **ZIP 解压改为流式读取**，避免按声明大小一次性分配内存。
 - **公开元信息过滤 `visible=false`**：`MetadataEntry::serializeVisible()`。
-- **`Config::Get()` 拒绝点路径**，运维脚本改用 `Get('admin')['token']`。
-- **审计日志轮转 + 尾部读取**，不再把整个文件读进内存。
-- **Redis `KEYS` 全部改为 `SCAN`**；`flushCache` 改用白名单，移除 `FLUSHDB` 快捷路径。
-- **遥测端点路径截断到 200 字符、端点键上限 2000**（超出归并 `:other`）；Redis 不可用时 `recordBatch()` 返回 0 而非谎报已处理。
+- **`Config::Get()` 拒绝点路径**，嵌套读取统一用 `Config::GetPath()`。
 - **子表关联补 `created`**，版本/加载器统计与 `filesCount` 不再跨分区串行。
 - **上传路径改为只解析 64KB 头部**：3.5MB 日志从 1.9s 降到 13ms，全文分析移到 `/v1/insights` 首次访问。
+
+### 移除
+
+- **应用层 Admin API 整体移除**：不再注册 `/{version}/admin/*`，删除 `AdminController`、`AdminAuthMiddleware`、Admin 配置段与 `ADMIN_ENABLED` / `ADMIN_TOKEN`；日志管理、配置管理、分析、存储健康、缓存清理、安全规则管理、SpinYarn 测试、审计日志、事件队列与死信管理接口全部下线。
+- **Admin 专用服务清理**：删除 `AnalyticsService`、`StorageHealthService`、`SystemLogManager`、`SpinYarnManager`、`AuditLogManager`；异步安全审核原因改由 `Syslog` 记录。
+- **队列与存储管理查询清理**：删除 `DeadLetterQueue` 的 list/retry/clear/count、`EventQueue::getStats/getMetrics`、`StorageInterface::List/Count` 及实现；死信仍由消费者内部 `push()` 归档。
+- **客户端遥测移除**：删除 `POST /{version}/telemetry/report`、`TelemetryController`、`TelemetryService` 与 `telemetry:*` 聚合逻辑；旧 Redis 键按 7 天 TTL 自然过期。
+- **元接口精简**：删除 `GET /{version}/filters` 与 `GET /{version}/errors/rate`；`/limits` 保留。内容脱敏过滤链本身不受影响。
+- **文件系统存储后端移除**：删除 `FilesystemStorage`、`filesystem` 配置段与 `storage.storages.f`；存储固定为 MariaDB。旧 `f` 开头的文件系统日志不再可读，需自行迁移。
+- **动态配置热更新移除**：删除 `Config::saveDynamic/resetDynamic/getMasked/ensureFresh` 等机制；配置统一由 `Config.inc.php` 与环境变量提供，修改后重启 Swoole 进程生效。
+- **AI / RAG 子系统剥离**：移除 LogAgent、Agent 工具链、AI 分析微队列、SSE 输出层、AI 指标、RAG MCP `/rag` 与相关管理接口；AI 功能由外部服务承接。
 
 ### 升级须知
 
 - 已有部署必须先执行 `php scripts/widen_token_column.php`，把 `logs.token` 从 `VARCHAR(64)` 扩到 `VARCHAR(80)`；该脚本幂等且只做 `ALTER TABLE`，不清数据。未执行时上传会以 `1406 Data too long` 失败。
-- `ADMIN_ENABLED` 默认值改为 `false`：升级后若未显式设置 `ADMIN_TOKEN`（≥32 字符），后台将保持关闭，需要时再手动开启。
+- Admin API、`/telemetry/report`、`/filters`、`/errors/rate` 均返回 404；依赖这些接口的控制台或客户端需同步下线或改造。
+- 启动前删除 `Config.inc.php` 中的 `admin`、`filesystem` 段与 `storage.storages.f`；旧 `runtime/dynamic_config.json` 中需要保留的配置请合并进 `Config.inc.php` 后删除该文件。
+- 文件系统后端的旧日志不会自动迁移到 MariaDB。
 
 ### 构建与 CI
 
@@ -45,23 +51,15 @@
 
 ### 文档
 
-- README / API.md / openapi.yaml 同步：token 改为 64 位十六进制、限流口径改为边缘实现、Compose 服务数改为六个、去重语义与 `deduplicated` 字段、补录 `POST /v1/telemetry/report`。
+- README / API.md / openapi.yaml / Postman 同步删除 Admin、遥测、过滤器与 `/errors/rate` 契约；版本统一为 1.8.4。
 - `plan.md` 归档为 `docs/archive-rag-plan-2026-08.md` 并标注历史状态；根目录废弃的 AI/RAG 计划 `Plan.md` 删除。
-- `/errors/rate` 的 OpenAPI / Postman 示例改为「始终返回 429」；Postman 的 token 示例统一为 64 位十六进制并补 `deduplicated`，Admin Token 占位值清空。
-- `docker/mariadb-events.sql` 按当前 TTL 重新生成分区布局（此前只铺到 2026-10-23）。
-- 封禁文件改为原子写入并 `chmod 0600`；`runtime/dynamic_config.json` 与审计日志同步收紧权限。
-- WAF 内部调用的 `Host` 改为从 `urls.apiBaseUrl` 推导，测试部署不再需要改代码。
-
-### 移除
-
-- **AI 智能诊断整体剥离**：移除 LogAgent、Agent 工具链、AI 分析微队列、SSE 输出层、AI 指标与领域知识管理；`/v1/ai/*`、`/v1/admin/ai/*`、`/v1/admin/system/queue` 及相关配置接口不再注册，统一返回 404。AI 功能由外部服务承接。
-- **RAG 子系统剥离**：移除本地 SQLite/FTS5/Semantic 检索、RAG MCP `/rag` 端点、RAG 命令与知识库数据，以及 `/v1/admin/rag/*` 管理接口。
-- **配置与构建清理**：移除 `ai`、`github` 配置段与 `AI_*`、`GITHUB_*` 环境变量；镜像不再安装 `pdo_sqlite`，容器启动不再构建 RAG 索引。旧 `Config.inc.php` 或 `dynamic_config.json` 中的 `ai`/`github` 段会在加载时丢弃，避免遗留密钥通过管理接口暴露。
+- 存储与部署文档改为仅 MariaDB；`docker/mariadb-events.sql` 按当前 TTL 重新生成分区布局。
+- 封禁文件改为原子写入并 `chmod 0600`；WAF 内部调用的 `Host` 改为从 `urls.apiBaseUrl` 推导，测试部署不再需要改代码。
 
 ### 保留
 
 - Codex 本地日志解析能力：`POST /v1/analyse`、`GET /v1/insights/{id}`，以及上传时的格式/版本识别。
-- 日志上传、存储、读取、删除、过滤、遥测、EventQueue、SpinYarn 反混淆、Admin 非 AI 管理功能与边缘 WAF/统计。
+- 日志上传、MariaDB 存储、读取、删除、脱敏过滤、EventQueue、SpinYarn 反混淆与边缘 WAF/统计。
 
 ## 1.8.3 — 2026-10-13
 

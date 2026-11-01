@@ -34,7 +34,7 @@ php vendor/bin/pest --filter=TestName
 ## 请求链路
 
 - 上传：`POST /v1/log` → `RequestParser` 解压 → `UploadParser` 校验 / ZIP 展开（同名条目自动改名为 `name (2)`）→ `Log::put()` 内的 `preFilter` + **仅头部** Codex 解析（64KB，取版本/加载器）+ 存储 → `EventQueue::dispatch(EVENT_LOG_UPLOADED)` → 立即 200。全文分析留给 `/v1/insights` 按需执行。耗时安全审核与 SpinYarn 反混淆在 `EventQueueConsumer` 异步执行。
-- 读取：`GET /v1/raw/{id}[/{filename}]` → Redis 缓存 → 存储回源并续期。`DELETE /v1/log/{id}` 校验 Bearer 删除 token：库里只存 `sha256:<hex>`，`Token::fromHash()` 永远只比较哈希，**存储值本身不能当凭证**（历史缺陷已修）。读路径不做分区 DDL，过期回收只走事件与存储层清理入口。
+- 读取：`GET /v1/raw/{id}[/{filename}]` → Redis 缓存 → 存储回源并续期。`DELETE /v1/log/{id}` 校验 Bearer 删除 token：库里只存 `sha256:<hex>`，`Token::fromHash()` 永远只比较哈希，**存储值本身不能当凭证**（历史缺陷已修）。读路径不做分区 DDL，过期回收只走 MariaDB Event。
 
 ## 存储 / ID
 
@@ -89,10 +89,10 @@ php vendor/bin/pest --filter=TestName
 ## 边缘 WAF / 统计（submodule）
 
 - WAF 入口在 `docker/nginx/default.conf` 的 `access_by_lua_file` 等；http 级指令在 `OpenLiteWaf/nginx/nginx.conf`（shared dict、`init_by_lua`）。容器镜像是 `openresty/openresty:1.27.1.2-alpine`，不是 stock nginx。
-- 路径形态的探测规则（`.php`、`/.git/`、敏感文件扩展名）必须限定 `uri` / `path`；放宽到 body / UA 会封正常客户端。接收任意文本的端点做 body 豁免：log、analyse（WAF 子模块仍保留已下线的 telemetry/admin 前缀，待其独立仓库清理；URI / UA 仍匹配）。body 只扫前 64KB，`Content-Length > 2MB` 跳过（chunked 仍扫）；`/{version}/raw/{id}/{filename}` 通过 `is_raw_file_request` 绕过扩展名规则。
+- 路径形态的探测规则（`.php`、`/.git/`、敏感文件扩展名）必须限定 `uri` / `path`；放宽到 body / UA 会封正常客户端。接收任意文本的端点做 body 豁免：log、analyse（URI / UA 仍匹配）。body 只扫前 64KB，`Content-Length > 2MB` 跳过（chunked 仍扫）；`/{version}/raw/{id}/{filename}` 通过 `is_raw_file_request` 绕过扩展名规则。
 - CC 超限返回 429 + `Retry-After` 且不封 IP；特征命中返回 403，并按 `sig_strikes`（默认 3）累计才封。CC 阈值必须低于 nginx `limit_req`（30r/s），否则请求先被 503。
 - 封禁与计数 60s 快照，重启后恢复；`docker exec logshare-nginx nginx -s reload` 在本部署不可靠，改 Lua 后用 `docker restart logshare-nginx`。重启不能清误封，走带 `OPENLITEWAF_ADMIN_TOKEN` 的 `POST /security/unban`（未配置 token 或长度不足时 404 fail-closed）。
-- `OpenLiteStats` 记录通过请求，排除 `/security`、`/stats`（`/telemetry`、`/admin` 是已下线端点的历史排除项，待在子模块清理）；排除按路径段边界匹配，空 prefix 会关闭全站统计。热门端点聚合时模板化 ID，IP 脱敏，`OPTIONS` 不计。
+- `OpenLiteStats` 记录通过请求，排除 `/security`、`/stats`；排除按路径段边界匹配，空 prefix 会关闭全站统计。热门端点聚合时模板化 ID，IP 脱敏，`OPTIONS` 不计。
 
 ## CI / 发布
 

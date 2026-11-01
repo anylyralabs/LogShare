@@ -49,7 +49,6 @@ afterEach(function () {
     foreach ([
         CORE_PATH . '/runtime/content_reject_rules.json',
         CORE_PATH . '/runtime/security_bans.json',
-        CORE_PATH . '/runtime/dynamic_config.json',
     ] as $file) {
         if (is_file($file)) {
             @unlink($file);
