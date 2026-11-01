@@ -4,7 +4,7 @@ LogShare 是一个面向 Minecraft 与 Hytale 等沙盒游戏的高性能日志�
 
 AI 智能诊断已从本仓库剥离，由外部服务提供；本仓库保留日志上传、分享、Codex 本地结构化解析，以及异步安全审核与 SpinYarn 反混淆流水线。`/v1/ai/*`、`/rag` 及相关管理接口不再提供，统一返回 404。
 
-服务端基于 Hyperf 3.2 框架与 Swoole 6.2 高性能协程常驻进程引擎，原生要求 PHP 8.4 及以上。存储后端使用 MariaDB，Redis 作为缓存、限流与事件流消息总线。当前版本 `v1.8.4`，更新记录见 [`CHANGELOG.md`](CHANGELOG.md)。
+服务端基于 Hyperf 3.2 框架与 Swoole 6.2 高性能协程常驻进程引擎，原生要求 PHP 8.4 及以上。存储后端使用 MariaDB，Redis 作为缓存、限流与事件流消息总线。当前版本 `v1.8.4_hotfix.1`，更新记录见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ## 环境要求
 

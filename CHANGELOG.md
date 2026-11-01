@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.8.4_hotfix.1 — 2026-11-01
+
+### 修复
+
+- **CI 干净 checkout 失败**：`tmp/` 被 `.gitignore` 忽略，GitHub Actions 上不存在，导致 `ConfigValidationTest` 写临时配置失败、ZIP 解析测试返回空结果；测试 bootstrap 现在自动创建 `tmp/`。
+- **PHPStan `$argv` 未定义告警**：`scripts/migrate_partitioned_storage.php` 与 `scripts/clover_to_lcov.php` 改用 `$_SERVER['argv'] ?? []`，不再依赖 CLI SAPI 全局变量。
+- **PHP 8.5 弃用警告**：移除测试中的 `ReflectionMethod::setAccessible()` 调用；该调用自 PHP 8.1 起已无实际作用。
+
 ## 1.8.4 — 2026-11-01
 
 第四期 Code Review 修复与 API 精简：5 项严重、21 项一般、16 项建议全部处理；同时移除应用层 Admin API、客户端遥测、过滤器/限流测试端点、文件系统存储后端与动态配置热更新。
