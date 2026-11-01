@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: LogShare API
-  version: 1.8.4_hotfix.1
+  version: 1.8.5
   description: |
     Minecraft / Hytale log analysis and sharing platform.
     
@@ -105,11 +105,12 @@ paths:
                   description: Raw log content
                 metadata:
                   type: array
+                  maxItems: 100
                   items:
                     $ref: '#/components/schemas/MetadataEntry'
                 source:
                   type: string
-                  maxLength: 100
+                  maxLength: 64
           application/json:
             schema:
               type: object
@@ -120,11 +121,12 @@ paths:
                   description: Raw log content
                 metadata:
                   type: array
+                  maxItems: 100
                   items:
                     $ref: '#/components/schemas/MetadataEntry'
                 source:
                   type: string
-                  maxLength: 100
+                  maxLength: 64
       responses:
         '200':
           description: Log created
@@ -237,11 +239,12 @@ paths:
                   description: Raw log content
                 metadata:
                   type: array
+                  maxItems: 100
                   items:
                     $ref: '#/components/schemas/MetadataEntry'
                 source:
                   type: string
-                  maxLength: 100
+                  maxLength: 64
           application/json:
             schema:
               type: object
@@ -265,11 +268,12 @@ paths:
                         description: File content or ZIP archive bytes
                 metadata:
                   type: array
+                  maxItems: 100
                   items:
                     $ref: '#/components/schemas/MetadataEntry'
                 source:
                   type: string
-                  maxLength: 100
+                  maxLength: 64
       responses:
         '200':
           description: Log created
@@ -453,7 +457,7 @@ paths:
                   lines: { type: integer }
                   created: { type: integer, nullable: true }
                   expires: { type: integer, nullable: true }
-                  metadata: { type: array, items: { $ref: '#/components/schemas/MetadataEntry' } }
+                  metadata: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/MetadataEntry' } }
                   source: { type: string, nullable: true }
                   files:
                     type: array
@@ -953,13 +957,38 @@ components:
     MetadataEntry:
       type: object
       required: [key, value]
+      description: |
+        Structured log metadata. Clients are strongly encouraged to submit
+        analysis-relevant fields such as `version`, `loader`, `launcher`,
+        `modpack` and crash context. At most 100 entries are accepted; the
+        first entry wins when keys are duplicated.
       properties:
         key:
           type: string
-          maxLength: 100
+          minLength: 1
+          maxLength: 64
+          description: Metadata key, trimmed; empty keys are rejected.
         value:
+          description: |
+            String values are stored as-is; numbers, booleans, arrays and
+            objects are JSON-serialized. Strings are limited to 1024 characters.
+          oneOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: array
+              items: {}
+            - type: object
+              additionalProperties: true
+        label:
           type: string
-          maxLength: 500
+          nullable: true
+          maxLength: 128
+          description: Optional display label.
+        visible:
+          type: boolean
+          default: true
+          description: When false, the entry is omitted from the public log metadata response.
     ErrorResponse:
       type: object
       required: [success, error, code]

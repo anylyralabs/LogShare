@@ -96,29 +96,14 @@ class ContentParser
             case "application/x-www-form-urlencoded":
             default:
                 parse_str($body, $data);
-                break;
+                return $this->parseJsonData($data);
         }
-
-        if (!isset($data['content'])) {
-            return new ApiError(400, "Required POST argument 'content' not found.");
-        }
-
-        // content[]=x 之类会被 parse_str 解析为数组，提前拒绝避免下游类型混乱
-        if (!is_string($data['content'])) {
-            return new ApiError(400, "Field 'content' must be a string.");
-        }
-
-        if (empty($data['content'])) {
-            return new ApiError(400, "Required POST argument 'content' is empty.");
-        }
-
-        return $data['content'];
     }
 
     /**
-     * Parse JSON request data
+     * 解析 JSON 与 urlencoded 表单的结构化字段（content / metadata / source / files）。
      *
-     * @param array<string, mixed> $data
+     * @param array<array-key, mixed> $data
      * @return array<string, mixed>|ApiError
      */
     protected function parseJsonData(array $data): array|ApiError
@@ -157,7 +142,7 @@ class ContentParser
         if (isset($data['source']) && is_string($data['source']) && trim($data['source']) !== '') {
             // 按字符截断：按字节截断会把中文启动器名切成非法 UTF-8，
             // 写 utf8mb4 时报 1366，或让 json_encode 直接失败。
-            $result['source'] = mb_strcut(trim($data['source']), 0, 64, 'UTF-8');
+            $result['source'] = mb_substr(trim($data['source']), 0, 64, 'UTF-8');
         } else {
             try {
                 $ua = $this->request->getHeaderLine('User-Agent');

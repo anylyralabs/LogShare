@@ -138,6 +138,28 @@ test('Token hash value is prefixed and stable', function () {
     expect(Token::hashValue('x'))->not->toBe(Token::hashValue('y'));
 });
 
+test('MetadataEntry rejects empty or whitespace-only keys', function () {
+    expect(MetadataEntry::fromArray(['key' => '', 'value' => 'v']))->toBeNull();
+    expect(MetadataEntry::fromArray(['key' => '   ', 'value' => 'v']))->toBeNull();
+    expect(MetadataEntry::allFromArray([
+        ['key' => '', 'value' => 'v'],
+        ['key' => 'version', 'value' => '1.20.1'],
+    ]))->toHaveCount(1);
+});
+
+test('MetadataEntry limits key, label and value by characters', function () {
+    $entry = MetadataEntry::fromArray([
+        'key' => str_repeat('键', 100),
+        'value' => str_repeat('值', 2000),
+        'label' => str_repeat('标', 200),
+    ]);
+
+    expect($entry)->not->toBeNull();
+    expect(mb_strlen((string) $entry->getKey(), 'UTF-8'))->toBe(64);
+    expect(mb_strlen((string) $entry->getLabel(), 'UTF-8'))->toBe(128);
+    expect(mb_strlen((string) $entry->getValue(), 'UTF-8'))->toBe(1024);
+});
+
 test('MetadataEntry allFromArray keeps the first entry for duplicate keys', function () {
     $entries = MetadataEntry::allFromArray([
         ['key' => 'version', 'value' => '1.20.1'],

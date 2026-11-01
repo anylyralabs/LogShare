@@ -98,8 +98,15 @@ class MetadataEntry implements \JsonSerializable
 
     public function setKey(?string $key): static
     {
-        if (is_string($key) && strlen($key) > static::MAX_KEY_LENGTH) {
-            $key = mb_strcut($key, 0, static::MAX_KEY_LENGTH, 'UTF-8');
+        if (is_string($key)) {
+            $key = trim($key);
+            if ($key === '') {
+                $this->key = null;
+                return $this;
+            }
+            if (mb_strlen($key, 'UTF-8') > static::MAX_KEY_LENGTH) {
+                $key = mb_substr($key, 0, static::MAX_KEY_LENGTH, 'UTF-8');
+            }
         }
         $this->key = $key;
         return $this;
@@ -117,9 +124,9 @@ class MetadataEntry implements \JsonSerializable
     public function setValue(mixed $value): static
     {
         if (is_string($value)) {
-            if (strlen($value) > static::MAX_VALUE_LENGTH) {
+            if (mb_strlen($value, 'UTF-8') > static::MAX_VALUE_LENGTH) {
                 // 按字符而非字节截断，避免在多字节字符中间切出非法 UTF-8
-                $value = mb_strcut($value, 0, static::MAX_VALUE_LENGTH, 'UTF-8');
+                $value = mb_substr($value, 0, static::MAX_VALUE_LENGTH, 'UTF-8');
             }
             $this->value = $value;
             return $this;
@@ -133,10 +140,10 @@ class MetadataEntry implements \JsonSerializable
             $this->value = null;
             return $this;
         }
-        if (strlen($encodedValue) > static::MAX_VALUE_LENGTH) {
+        if (mb_strlen($encodedValue, 'UTF-8') > static::MAX_VALUE_LENGTH) {
             // 编码后超长的复合值按字符截断为展示用字符串；截断结果不再是
             // 合法 JSON，仅用于展示（MariaDB 读取端的类型还原对此原样放行）
-            $encodedValue = mb_strcut($encodedValue, 0, static::MAX_VALUE_LENGTH, 'UTF-8');
+            $encodedValue = mb_substr($encodedValue, 0, static::MAX_VALUE_LENGTH, 'UTF-8');
         }
         $this->value = $encodedValue;
         return $this;
@@ -168,8 +175,15 @@ class MetadataEntry implements \JsonSerializable
 
     public function setLabel(?string $label): static
     {
-        if (is_string($label) && strlen($label) > static::MAX_LABEL_LENGTH) {
-            $label = mb_strcut($label, 0, static::MAX_LABEL_LENGTH, 'UTF-8');
+        if (is_string($label)) {
+            $label = trim($label);
+            if ($label === '') {
+                $this->label = null;
+                return $this;
+            }
+            if (mb_strlen($label, 'UTF-8') > static::MAX_LABEL_LENGTH) {
+                $label = mb_substr($label, 0, static::MAX_LABEL_LENGTH, 'UTF-8');
+            }
         }
         $this->label = $label;
         return $this;
@@ -205,7 +219,7 @@ class MetadataEntry implements \JsonSerializable
 
     public function isValid(): bool
     {
-        return $this->key !== null && $this->value !== null;
+        return $this->key !== null && $this->key !== '' && $this->value !== null;
     }
 
     /**
@@ -223,8 +237,20 @@ class MetadataEntry implements \JsonSerializable
         if (isset($data['label']) && is_string($data['label'])) {
             $this->setLabel($data['label']);
         }
-        if (isset($data['visible']) && is_bool($data['visible'])) {
-            $this->setVisible($data['visible']);
+        if (isset($data['visible'])) {
+            $visible = $data['visible'];
+            if (is_bool($visible)) {
+                $this->setVisible($visible);
+            } elseif (is_int($visible) || is_float($visible)) {
+                $this->setVisible($visible != 0);
+            } elseif (is_string($visible)) {
+                $normalized = strtolower(trim($visible));
+                if (in_array($normalized, ['1', 'true', 'yes', 'on'], true)) {
+                    $this->setVisible(true);
+                } elseif (in_array($normalized, ['0', 'false', 'no', 'off'], true)) {
+                    $this->setVisible(false);
+                }
+            }
         }
         return $this;
     }

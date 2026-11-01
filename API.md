@@ -65,16 +65,19 @@ POST /v1/log
 **Content-Encoding：** 默认推荐 `br`（Brotli，极限压缩比），向下兼容 `gzip`、`x-gzip`、`deflate`（可叠加，最多 5 层，服务端设 20 MiB 解压安全上限）。
 **Accept-Encoding：** 默认采用 `br`（Brotli）全链路压缩返回（≥1024 字节），未声明时回退 `gzip`、`deflate`。
 
-**请求字段（JSON）：**
+**请求字段（JSON / urlencoded）：**
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `content` | string | 是* | 日志内容（多文件上传时可为空，见下） |
 | `files` | array | 否 | 附加文件数组，每个元素 `{name, content}` |
-| `metadata[]` | array | 否 | 元数据，每项 `{key, value, label?, visible?}`；`value` 为字符串时直接存储，其他类型会 JSON 序列化；单项最长 value 1024 / label 128 / key 64 字符。服务端会在落库前用日志识别结果自动补写 `version`（Minecraft 版本）与 `loader`（fabric / neoforge / forge / vanilla 等）两项元数据，客户端已提交同名键时以客户端值为准，不受影响；补写项的 `label` 固定为 `Minecraft 版本` 与 `模组加载器`，`visible` 为默认 true |
+| `metadata[]` | array | 否 | **分析核心输入**，每项 `{key, value, label?, visible?}`。最多 100 条；`key` 去除首尾空白后必须为 1–64 字符，`value` 字符串最长 1024 字符、其他类型会 JSON 序列化，`label` 最长 128 字符；重复 `key` 以首次出现为准；`visible=false` 的条目不会出现在公开元信息接口。JSON 与 `application/x-www-form-urlencoded` 均支持。服务端会在落库前用日志识别结果补写 `version`（Minecraft 版本）与 `loader`（fabric / neoforge / forge / vanilla 等），客户端已提交同名键时以客户端值为准；补写项的 `label` 固定为 `Minecraft 版本` 与 `模组加载器` |
 | `source` | string | 否 | 来源标识（最长 64 字符），建议填写，格式如 `fcl/1.2.0`、`pojavlauncher/3.4.1`。该字段用于按启动器生态统计与分发日志 |
 
 \* 当提供 `files` 时 `content` 可省略，主文件取 `files[0]`。
+
+> **metadata 很重要，不是可选装饰。** 上传时请尽量提供 `version`、`loader`、`launcher`、`modpack`、崩溃上下文等结构化字段；`GET /v1/log/{id}` 会展示这些信息（`visible=false` 除外），后续分析、排查与统计都会依赖它。不要把关键信息只塞进日志正文。
+
 
 **多文件上传：**
 

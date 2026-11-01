@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.8.5 — 2026-11-01
+
+### 修复
+
+- **表单上传的 metadata/source 不再丢失**：`application/x-www-form-urlencoded` 现在与 JSON 共用结构化解析，`metadata`、`source`、`files` 都会正常进入落库流程。
+- **metadata 校验与长度口径**：拒绝空 key（首尾空白 trim 后为空），key / label / value 按字符数限制为 64 / 128 / 1024；`visible` 在表单中兼容 `1/0`、`true/false` 等写法。
+- **OpenAPI 与实现对齐**：`MetadataEntry` 修正 key/value 限制，补 `label`、`visible`、JSON 值类型、最多 100 条，以及表单上传支持说明。
+- **API 文档强化 metadata 地位**：明确 metadata 是分析、展示与排查的核心结构化输入，建议客户端上传 version、loader、launcher、modpack 与崩溃上下文；`visible=false` 不公开。
+
 ## 1.8.4_hotfix.1 — 2026-11-01
 
 ### 修复

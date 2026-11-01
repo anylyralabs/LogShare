@@ -89,13 +89,42 @@ test('parseJsonData rejects non-array files field', function () {
     expect(isset($result['files']))->toBeFalse();
 });
 
-test('parseJsonData truncates source to 64 chars', function () {
+test('parseJsonData truncates source to 64 characters', function () {
     $result = parseJsonViaContentParser([
         'content' => 'x',
-        'source' => str_repeat('s', 100),
+        'source' => str_repeat('源', 100),
     ]);
 
-    expect(strlen($result['source']))->toBeLessThanOrEqual(64);
+    expect(mb_strlen($result['source'], 'UTF-8'))->toBe(64);
+});
+
+test('ContentParser parses form-urlencoded metadata and source', function () {
+    $payload = http_build_query([
+        'content' => 'form log line',
+        'metadata' => [
+            ['key' => 'version', 'value' => '1.20.1', 'label' => 'Minecraft 版本', 'visible' => true],
+            ['key' => 'private', 'value' => 'hidden', 'visible' => false],
+        ],
+        'source' => 'HMCL/3.5.0',
+    ]);
+
+    $request = Mockery::mock(\Hyperf\HttpServer\Contract\RequestInterface::class);
+    $stream = Mockery::mock(\Psr\Http\Message\StreamInterface::class);
+    $stream->shouldReceive('getContents')->andReturn($payload);
+    $request->shouldReceive('getBody')->andReturn($stream);
+    $request->shouldReceive('getHeaderLine')->with('Content-Encoding')->andReturn('');
+    $request->shouldReceive('getHeaderLine')->with('Content-Type')->andReturn('application/x-www-form-urlencoded');
+    $request->shouldReceive('getHeaderLine')->with('User-Agent')->andReturn('HMCL/3.5.0');
+
+    $parser = new App\ContentParser($request);
+    $result = $parser->getContent();
+
+    expect($result)->toBeArray();
+    expect($result['content'])->toBe('form log line');
+    expect($result['source'])->toBe('HMCL/3.5.0');
+    expect($result['metadata'])->toHaveCount(2);
+    expect($result['metadata'][0]->getKey())->toBe('version');
+    expect($result['metadata'][1]->isVisible())->toBeFalse();
 });
 
 test('ContentParser handles Content-Encoding: br appropriately', function () {
