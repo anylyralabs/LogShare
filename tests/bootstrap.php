@@ -30,19 +30,6 @@ if (!extension_loaded('redis')) {
 }
 
 // Helper functions for tests
-function createTestLog(string $content = ''): \App\Log {
-    $log = new \App\Log();
-    $log->setData($content ?: <<<'LOG'
-[12:34:56] [Server thread/INFO]: Starting minecraft server version 1.20.1
-[12:34:56] [Server thread/INFO]: Loading properties
-[12:34:56] [Server thread/INFO]: Default game type: SURVIVAL
-[12:34:57] [Server thread/INFO]: Generating keypair
-[12:34:57] [Server thread/INFO]: Starting Minecraft server on *:25565
-LOG
-    );
-    return $log;
-}
-
 function createTestToken(): \App\Data\Token {
     return new \App\Data\Token();
 }

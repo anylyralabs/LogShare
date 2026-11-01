@@ -4,7 +4,6 @@ namespace App\Controller;
 
 use App\ApiError;
 use App\Data\Token;
-use App\Queue\EventQueue;
 use Hyperf\HttpServer\Annotation\Controller;
 use Hyperf\HttpServer\Annotation\DeleteMapping;
 use Hyperf\HttpServer\Annotation\PostMapping;
@@ -19,65 +18,39 @@ class LogController extends AbstractController
         // 1. IP 黑名单校验
         $this->checkIpBan();
 
-        $content = $this->validateContentExists($this->parseContent());
-
-        $metadata = [];
-        $source = null;
-        $files = null;
-        if (is_array($content)) {
-            $metadata = $content['metadata'] ?? [];
-            $source = $content['source'] ?? null;
-            $files = !empty($content['files']) ? $content['files'] : null;
-            $content = $content['content'];
-
-            if (empty($content) && $files !== null) {
-                $content = $files[0]['data'] ?? '';
-            }
+        $parsed = $this->parseContent();
+        if ($parsed instanceof ApiError) {
+            throw $parsed;
         }
 
-        // 违规内容过滤：若开启异步审核则交由队列处理以大幅提升上传速度，否则保留同步检查
-        if (!EventQueue::config()['asyncSecurityAudit']) {
-            $this->checkContentSecurity($content, $files);
-        }
+        $files = $parsed['files'] ?? [];
+        $metadata = $parsed['metadata'] ?? [];
+        $source = isset($parsed['source']) && is_string($parsed['source']) ? $parsed['source'] : null;
 
-        if (empty($source)) {
-            $ua = $this->request->getHeaderLine('User-Agent');
-            $launcher = \App\ContentParser::parseLauncherSource($ua);
-            $source = $launcher ?? '未指定';
+        if (!is_array($files) || $files === []) {
+            throw new ApiError(400, "At least one file is required.");
         }
 
         $log = new \App\Log();
         $token = new Token();
 
-        $id = $log->put($content, $token, $metadata, $source, $files);
+        // 上传阶段逐文件脱敏并执行 SpinYarn 反混淆；全文 Codex 分析不在这里执行。
+        $id = $log->put($files, $token, is_array($metadata) ? $metadata : [], $source);
         if ($id === null) {
             throw new ApiError(500, 'Failed to persist log.');
         }
 
-        // 去重命中时没有新内容落库，也没有新的审核/反混淆工作可做：
-        // 重复派发只会让队列做无用功，还会重复审核已通过的日志。
-        if (!$log->wasDeduplicated()) {
-            // 统一异步队列事件调度：反混淆、关键词安全审核等后台排队异步执行
-            $dispatched = EventQueue::dispatch(EventQueue::EVENT_LOG_UPLOADED, [
-                'logId' => $id->get(),
-                'clientIp' => $this->getClientRealIp(),
-                'source' => $source,
-            ]);
-            if (!$dispatched) {
-                \App\Syslog::error('EventQueue', "Failed to process uploaded log {$id->get()} after persistence");
-            }
-        }
-
         $urls = \App\Config::Get('urls');
         $apiPrefix = $this->apiPrefix();
+        $idValue = $id->get();
 
         $payload = [
-            'id' => $id->get(),
-            'url' => $urls['baseUrl'] . "/" . $id->get(),
-            'raw' => $urls['apiBaseUrl'] . "/{$apiPrefix}/raw/" . $id->get(),
+            'id' => $idValue,
+            'url' => $urls['baseUrl'] . "/" . $idValue,
+            'filesUrl' => $urls['apiBaseUrl'] . "/{$apiPrefix}/log/" . $idValue,
             'token' => $token->get(),
             'deduplicated' => $log->wasDeduplicated(),
-        ];
+        ] + $this->fileListPayload($log);
 
         return $this->respondSuccess($payload, 'Log submitted successfully');
     }

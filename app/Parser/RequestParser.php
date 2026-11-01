@@ -17,8 +17,8 @@ use InvalidArgumentException;
  */
 class RequestParser extends HyperfParser
 {
-    /** 单次请求体最大允许解压字节数（20MB，与 ContentParser 限制对齐），防御 Gzip 炸弹 OOM */
-    protected const int MAX_DECOMPRESSED_BYTES = 20 * 1024 * 1024;
+    /** 防御 Gzip 炸弹的硬上限；实际值按 storage.uploadFiles.maxRequestBodyBytes 计算 */
+    protected const int MAX_DECOMPRESSED_BYTES = 32 * 1024 * 1024;
 
     /**
      * @return array<string, mixed>
@@ -60,22 +60,31 @@ class RequestParser extends HyperfParser
         return [];
     }
 
+    private function maxDecompressedBytes(): int
+    {
+        $storage = \App\Config::Get('storage');
+        $upload = $storage['uploadFiles'] ?? [];
+        $configured = (int) ($upload['maxRequestBodyBytes'] ?? static::MAX_DECOMPRESSED_BYTES);
+        return min(static::MAX_DECOMPRESSED_BYTES, max(1, $configured));
+    }
+
     private function decodeBody(string $rawBody): ?string
     {
+        $limit = $this->maxDecompressedBytes();
         set_error_handler(static fn() => true);
         try {
             // Gzip magic header: 1f 8b
             if (str_starts_with($rawBody, "\x1f\x8b")) {
-                $decompressed = gzdecode($rawBody, static::MAX_DECOMPRESSED_BYTES);
+                $decompressed = gzdecode($rawBody, $limit);
                 if ($decompressed !== false) {
                     return $decompressed;
                 }
             }
 
             // Deflate (raw RFC 1951 or zlib RFC 1950)
-            $decompressed = gzinflate($rawBody, static::MAX_DECOMPRESSED_BYTES);
+            $decompressed = gzinflate($rawBody, $limit);
             if ($decompressed === false) {
-                $decompressed = gzuncompress($rawBody, static::MAX_DECOMPRESSED_BYTES);
+                $decompressed = gzuncompress($rawBody, $limit);
             }
             if ($decompressed !== false) {
                 return $decompressed;
@@ -85,7 +94,7 @@ class RequestParser extends HyperfParser
             if (function_exists('brotli_uncompress')) {
                 try {
                     $decompressed = brotli_uncompress($rawBody);
-                    if ($decompressed !== false && strlen($decompressed) <= static::MAX_DECOMPRESSED_BYTES) {
+                    if ($decompressed !== false && strlen($decompressed) <= $limit) {
                         return $decompressed;
                     }
                 } catch (\Throwable) {

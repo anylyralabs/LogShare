@@ -6,25 +6,25 @@ use App\Parser\RequestParser;
 
 test('RequestParser parses uncompressed json', function () {
     $parser = new RequestParser();
-    $result = $parser->parse('{"content":"hello"}', 'application/json');
+    $result = $parser->parse('{"files":[{"name":"x.log","content":"hello"}]}', 'application/json');
 
-    expect($result)->toBe(['content' => 'hello']);
+    expect($result)->toBe(['files' => [['name' => 'x.log', 'content' => 'hello']]]);
 });
 
 test('RequestParser parses gzipped json', function () {
     $parser = new RequestParser();
-    $raw = (string) gzencode('{"content":"hello gzip"}');
+    $raw = (string) gzencode('{"files":[{"name":"x.log","content":"hello gzip"}]}');
     $result = $parser->parse($raw, 'application/json');
 
-    expect($result)->toBe(['content' => 'hello gzip']);
+    expect($result)->toBe(['files' => [['name' => 'x.log', 'content' => 'hello gzip']]]);
 });
 
 test('RequestParser parses deflated json', function () {
     $parser = new RequestParser();
-    $raw = (string) gzdeflate('{"content":"hello deflate"}');
+    $raw = (string) gzdeflate('{"files":[{"name":"x.log","content":"hello deflate"}]}');
     $result = $parser->parse($raw, 'application/json');
 
-    expect($result)->toBe(['content' => 'hello deflate']);
+    expect($result)->toBe(['files' => [['name' => 'x.log', 'content' => 'hello deflate']]]);
 });
 
 test('RequestParser returns empty array for malformed json without throwing', function () {
@@ -62,7 +62,7 @@ test('RequestParser rejects gzip bomb exceeding max decompressed bytes', functio
     };
 
     // 构造展开后 500 字节的 gzip 数据
-    $largeString = json_encode(['content' => str_repeat('a', 500)]);
+    $largeString = json_encode(['files' => [['name' => 'x.log', 'content' => str_repeat('a', 500)]]]);
     $raw = (string) gzencode($largeString);
 
     $result = $parser->parse($raw, 'application/json');
@@ -76,7 +76,7 @@ test('RequestParser supports brotli decompression when extension is available', 
     }
 
     $parser = new RequestParser();
-    $data = ['content' => 'brotli compressed content', 'source' => 'client'];
+    $data = ['files' => [['name' => 'x.log', 'content' => 'brotli compressed content']], 'source' => 'client'];
     $raw = (string) brotli_compress(json_encode($data));
 
     $result = $parser->parse($raw, 'application/json');

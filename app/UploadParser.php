@@ -8,7 +8,7 @@ namespace App;
 class UploadParser
 {
     public const DEFAULT_MAX_FILES = 200;
-    public const DEFAULT_MAX_TOTAL_BYTES = 12 * 1024 * 1024;
+    public const DEFAULT_MAX_TOTAL_BYTES = 20 * 1024 * 1024;
     /** 与 MariaDB `log_files.name` VARCHAR(512) 及常见路径长度上限对齐 */
     public const MAX_NAME_LENGTH = 512;
 
@@ -71,8 +71,8 @@ class UploadParser
 
         $storageConfig = Config::Get('storage');
         $uploadConfig = $storageConfig['uploadFiles'] ?? [];
-        $maxFiles = $uploadConfig['maxFiles'] ?? self::DEFAULT_MAX_FILES;
-        $maxTotalBytes = $uploadConfig['maxTotalBytes'] ?? self::DEFAULT_MAX_TOTAL_BYTES;
+        $maxFiles = (int) ($uploadConfig['maxFiles'] ?? self::DEFAULT_MAX_FILES);
+        $maxTotalBytes = (int) ($uploadConfig['maxTotalBytes'] ?? self::DEFAULT_MAX_TOTAL_BYTES);
 
         $result = [];
         $totalBytes = 0;

@@ -20,24 +20,23 @@ class LogMetaController extends AbstractController
             throw new ApiError(404, "Log not found.");
         }
 
-        return $this->respondSuccess([
-            'id' => $logId->get(),
-            'size' => $log->getSize(),
-            'lines' => $log->getLineNumbers(),
-            'created' => $log->getCreated(),
-            'expires' => $log->getExpires(),
-            // visible=false 是客户端显式声明的「不要公开」，公开元信息接口必须尊重它
-            'metadata' => \App\Data\MetadataEntry::serializeVisible($log->getMetadata()),
-            'source' => $log->getSource(),
-            'files' => $log->getFiles(),
-            'raw' => $this->rawUrl($logId),
-        ], 'Log metadata retrieved successfully');
+        $payload = $this->fileListPayload($log);
+        $payload['size'] = $log->getSize();
+        $payload['lines'] = $log->getLineNumbers();
+        $payload['created'] = $log->getCreated();
+        $payload['expires'] = $log->getExpires();
+        // visible=false 是客户端显式声明的「不要公开」，公开元信息接口必须尊重它
+        $payload['metadata'] = \App\Data\MetadataEntry::serializeVisible($log->getMetadata());
+        $payload['source'] = $log->getSource();
+        $payload['filesUrl'] = $this->filesUrl($logId);
+
+        return $this->respondSuccess($payload, 'Log metadata retrieved successfully');
     }
 
-    private function rawUrl(\App\Id $id): string
+    private function filesUrl(\App\Id $id): string
     {
         $urls = \App\Config::Get('urls');
         $apiPrefix = $this->apiPrefix();
-        return $urls['apiBaseUrl'] . "/{$apiPrefix}/raw/" . $id->get();
+        return $urls['apiBaseUrl'] . "/{$apiPrefix}/log/" . $id->get();
     }
 }

@@ -33,8 +33,11 @@ class Config
         }
 
         self::applyEnvironmentOverrides($data);
-        // 旧版已移除的 ai/github 段直接丢弃，避免遗留密钥泄露
-        unset($data['ai'], $data['github']);
+        // 旧版已移除的 ai/github/事件队列/内容规则段直接丢弃，避免遗留密钥或行为残留
+        unset($data['ai'], $data['github'], $data['eventQueue']);
+        if (isset($data['security']) && is_array($data['security'])) {
+            unset($data['security']['contentRules']);
+        }
         // Example 配置中的占位符（如 '${REDIS_PASSWORD}'）在非 Docker 部署下不会
         // 被替换，占位符形态一律视为未配置，避免拿字面量去 AUTH Redis
         if (isset($data['cache']['redis']['password'])
@@ -100,18 +103,10 @@ class Config
             if (isset($security['trustedProxies']) && !is_array($security['trustedProxies'])) {
                 throw new \InvalidArgumentException('security.trustedProxies must be an array');
             }
-            if (isset($security['contentRules']['patterns']) && is_array($security['contentRules']['patterns'])) {
-                foreach ($security['contentRules']['patterns'] as $pt) {
-                    $plainPt = is_string($pt) ? \App\System\SecurityService::decryptSecret($pt) : '';
-                    if ($plainPt !== '' && @preg_match($plainPt, '') === false) {
-                        throw new \InvalidArgumentException("Invalid regular expression in security patterns: {$pt}");
-                    }
-                }
-            }
         }
 
         // 预过滤链是字符串类名，一旦写错，
-        // 上传与 /analyse 会在调用处抛 Error 变 500，只能回滚配置才能恢复。
+        // 上传会在调用处抛 Error 变 500，只能回滚配置才能恢复。
         $filters = $data['filter']['pre'] ?? [];
         if (!is_array($filters)) {
             throw new \InvalidArgumentException('filter.pre must be an array of filter class names');

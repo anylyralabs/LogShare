@@ -11,8 +11,3 @@ parameters:
     # SpinYarnClient 依赖 spinyarn PHP 扩展（常量/函数仅在编译了该扩展的
     # 环境存在：Docker 镜像与作者本机）；CI 静态分析环境不装该扩展。
     - app/Client/SpinYarnClient.php
-  ignoreErrors:
-    # Aternos Codex type hierarchy: analyse() lives on AnalysableLogInterface,
-    # while detect() returns the base LogInterface. Runtime classes implement both.
-    - message: '#Call to an undefined method Aternos\\Codex\\Log\\Log::analyse#'
-      path: app/Log.php

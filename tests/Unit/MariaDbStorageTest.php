@@ -36,7 +36,6 @@ private function ensureSchema(): void
     {
         Db::statement("CREATE TABLE IF NOT EXISTS logs (
             id CHAR(6) NOT NULL,
-            data LONGTEXT NOT NULL,
             token VARCHAR(80) NULL,
             source VARCHAR(64) NULL,
             created INT UNSIGNED NOT NULL,
@@ -82,18 +81,19 @@ private function ensureSchema(): void
     {
         $this->requireDb();
 
-        $id = MariaDbStorage::Put('main content', new Token(), [], 'test', [
+        $id = MariaDbStorage::Put([
+            ['name' => 'main.log', 'data' => 'main content'],
             ['name' => 'extra.log', 'data' => 'extra content'],
-        ]);
+        ], new Token(), [], 'test');
 
         expect($id)->toBeInstanceOf(\App\Id::class);
 
         $result = MariaDbStorage::Get($id);
         expect($result)->not->toBeNull();
-        expect($result['data'])->toBe('main content');
+        expect($result)->not->toHaveKey('data');
         expect($result['source'])->toBe('test');
         expect($result['token'])->toBeString();
-        expect($result['files'])->toHaveCount(1);
+        expect($result['files'])->toHaveCount(2);
         expect($result['files'][0]['name'])->toBe('extra.log');
         expect($result['files'][0]['data'])->toBe('extra content');
         expect($result['files'][0]['size'])->toBe(strlen('extra content'));
@@ -110,7 +110,7 @@ private function ensureSchema(): void
     {
         $this->requireDb();
 
-        $id = MariaDbStorage::Put('renew me', new Token());
+        $id = MariaDbStorage::Put([['name' => 'main.log', 'data' => 'renew me']], new Token());
         $before = MariaDbStorage::Get($id);
         expect($before['created'])->toBeInt();
 
@@ -131,13 +131,13 @@ private function ensureSchema(): void
     {
         $this->requireDb();
 
-        $first = MariaDbStorage::Put('duplicate content', new Token(), [], 'src-a');
-        $second = MariaDbStorage::Put('duplicate content', new Token(), [], 'src-a');
+        $first = MariaDbStorage::Put([['name' => 'main.log', 'data' => 'duplicate content']], new Token(), [], 'src-a');
+        $second = MariaDbStorage::Put([['name' => 'main.log', 'data' => 'duplicate content']], new Token(), [], 'src-a');
 
         expect($second->get())->toBe($first->get());
 
         $count = Db::table('logs')
-            ->where('fingerprint', MariaDbStorage::fingerprint('duplicate content', null, 'src-a'))
+            ->where('fingerprint', MariaDbStorage::fingerprint([['name' => 'main.log', 'data' => 'duplicate content']], 'src-a'))
             ->count();
         expect((int) $count)->toBe(1);
 
@@ -145,28 +145,31 @@ private function ensureSchema(): void
     }
 
     /**
-     * 指纹判定范围为「正文 + 附加文件 + source」，任一项不同都应视为不同日志。
+     * 指纹判定范围为「按名称排序的文件集合 + source」，任一项不同都应视为不同日志。
      */
-    public function testFingerprintDistinguishesContentSourceAndFiles(): void
+    public function testFingerprintDistinguishesSourceAndFiles(): void
     {
         $this->requireDb();
 
-        $base = MariaDbStorage::fingerprint('body', null, 'src');
+        $base = MariaDbStorage::fingerprint([['name' => 'main.log', 'data' => 'body']], 'src');
 
         // source 不同 → 指纹不同
-        expect(MariaDbStorage::fingerprint('body', null, 'other'))->not->toBe($base);
-        // 正文不同 → 指纹不同
-        expect(MariaDbStorage::fingerprint('body2', null, 'src'))->not->toBe($base);
-        // 附加文件不同 → 指纹不同
-        $withFile = MariaDbStorage::fingerprint('body', [['name' => 'a.log', 'data' => 'x']], 'src');
+        expect(MariaDbStorage::fingerprint([['name' => 'main.log', 'data' => 'body']], 'other'))->not->toBe($base);
+        // 文件内容不同 → 指纹不同
+        expect(MariaDbStorage::fingerprint([['name' => 'main.log', 'data' => 'body2']], 'src'))->not->toBe($base);
+        // 增加文件 → 指纹不同
+        $withFile = MariaDbStorage::fingerprint([
+            ['name' => 'main.log', 'data' => 'body'],
+            ['name' => 'a.log', 'data' => 'x'],
+        ], 'src');
         expect($withFile)->not->toBe($base);
 
-        // 附件顺序不同但内容相同 → 指纹相同（排序保证顺序无关）
-        $f1 = MariaDbStorage::fingerprint('body', [
+        // 文件顺序不同但内容相同 → 指纹相同（排序保证顺序无关）
+        $f1 = MariaDbStorage::fingerprint([
             ['name' => 'a.log', 'data' => 'x'],
             ['name' => 'b.log', 'data' => 'y'],
         ], 'src');
-        $f2 = MariaDbStorage::fingerprint('body', [
+        $f2 = MariaDbStorage::fingerprint([
             ['name' => 'b.log', 'data' => 'y'],
             ['name' => 'a.log', 'data' => 'x'],
         ], 'src');
@@ -231,11 +234,12 @@ private function ensureSchema(): void
     {
         $this->requireDb();
 
-        $id = MariaDbStorage::Put('parent sync', new Token(), [
-            \App\Data\MetadataEntry::fromArray(['key' => 'version', 'value' => '1.20.1', 'label' => 'v', 'visible' => true]),
-        ], 'sync-src', [
+        $id = MariaDbStorage::Put([
+            ['name' => 'main.log', 'data' => 'parent sync'],
             ['name' => 'extra.log', 'data' => 'extra body'],
-        ]);
+        ], new Token(), [
+            \App\Data\MetadataEntry::fromArray(['key' => 'version', 'value' => '1.20.1', 'label' => 'v', 'visible' => true]),
+        ], 'sync-src');
 
         try {
             $parentCreated = (int) Db::table('logs')->where('id', $id->getRaw())->value('created');
@@ -257,11 +261,12 @@ private function ensureSchema(): void
     {
         $this->requireDb();
 
-        $id = MariaDbStorage::Put('renew sync', new Token(), [
-            \App\Data\MetadataEntry::fromArray(['key' => 'version', 'value' => '1.20.1', 'label' => 'v', 'visible' => true]),
-        ], 'renew-src', [
+        $id = MariaDbStorage::Put([
+            ['name' => 'main.log', 'data' => 'renew sync'],
             ['name' => 'extra.log', 'data' => 'extra body'],
-        ]);
+        ], new Token(), [
+            \App\Data\MetadataEntry::fromArray(['key' => 'version', 'value' => '1.20.1', 'label' => 'v', 'visible' => true]),
+        ], 'renew-src');
 
         try {
             Db::table('logs')->where('id', $id->getRaw())->update(['created' => time() - 99999999]);
@@ -282,8 +287,8 @@ private function ensureSchema(): void
     {
         $this->requireDb();
 
-        $expired = MariaDbStorage::Put('expired', new Token());
-        $fresh = MariaDbStorage::Put('fresh', new Token());
+        $expired = MariaDbStorage::Put([['name' => 'main.log', 'data' => 'expired']], new Token());
+        $fresh = MariaDbStorage::Put([['name' => 'main.log', 'data' => 'fresh']], new Token());
         Db::table('logs')->where('id', $expired->getRaw())->update(['created' => time() - 99999999]);
 
         $deleted = MariaDbStorage::CleanupExpired();
@@ -298,7 +303,7 @@ private function ensureSchema(): void
     {
         $this->requireDb();
 
-        $id = MariaDbStorage::Put('renewed', new Token());
+        $id = MariaDbStorage::Put([['name' => 'main.log', 'data' => 'renewed']], new Token());
         Db::table('logs')->where('id', $id->getRaw())->update(['created' => time() - 99999999]);
         expect(MariaDbStorage::Renew($id))->toBeTrue();
 
@@ -334,7 +339,7 @@ private function ensureSchema(): void
             \App\Data\MetadataEntry::fromArray(['key' => 'active', 'value' => true, 'label' => 'Active Status', 'visible' => false]),
         ];
 
-        $id = MariaDbStorage::Put('log with metadata', new Token(), $entries);
+        $id = MariaDbStorage::Put([['name' => 'main.log', 'data' => 'log with metadata']], new Token(), $entries);
         try {
             $result = MariaDbStorage::Get($id);
             expect($result)->not->toBeNull();

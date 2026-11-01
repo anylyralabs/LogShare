@@ -16,20 +16,20 @@ class IndexController extends AbstractController
         $endpoints = [
             'POST /1/log',
             'DELETE /1/log/{id}',
-            'POST /1/analyse',
             'GET /1/limits',
             'GET /1/raw/{id}',
             'GET /1/raw/{id}/{filename:.+}',
             'GET /1/log/{id}',
             'GET /1/insights/{id}',
+            'GET /1/insights/{id}/{filename:.+}',
             'POST /v1/log',
             'DELETE /v1/log/{id}',
-            'POST /v1/analyse',
             'GET /v1/limits',
             'GET /v1/raw/{id}',
             'GET /v1/raw/{id}/{filename:.+}',
             'GET /v1/log/{id}',
             'GET /v1/insights/{id}',
+            'GET /v1/insights/{id}/{filename:.+}',
         ];
 
         return \App\ApiResponse::success(['endpoints' => $endpoints], 'LogShare API');

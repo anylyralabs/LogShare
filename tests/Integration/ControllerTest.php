@@ -14,7 +14,8 @@ class ControllerTest extends HttpTestCase
 
         $response->assertSuccessful();
         $response->assertJsonFragment(['storageTime' => 604800]);
-        $response->assertJsonFragment(['maxLines' => 50000]);
+        $response->assertJsonFragment(['maxFiles' => 200]);
+        $response->assertJsonFragment(['maxTotalBytes' => 20971520]);
     }
 
     public function testLegacyPrefixRoutesToSameController(): void

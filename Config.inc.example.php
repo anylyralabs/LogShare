@@ -20,11 +20,12 @@ return [
         // 磁盘空间会被真正归还操作系统（DELETE 只会留下永不回收的空洞）。
         // 修改后需执行 php scripts/sync_mariadb_events.php 并重启 mariadb-events 容器生效。
         'storageTime' => 7 * 24 * 60 * 60,
-        'maxLength' => 10 * 1024 * 1024,
-        'maxLines' => 50_000,
         'uploadFiles' => [
             'maxFiles' => 200,
-            'maxTotalBytes' => 12 * 1024 * 1024,
+            // 所有文件展开后的合计上限；不限制单个文件大小或行数
+            'maxTotalBytes' => 20 * 1024 * 1024,
+            // 解压后的请求体安全上限，需覆盖 20 MiB 文件与 JSON/表单编码开销
+            'maxRequestBodyBytes' => 32 * 1024 * 1024,
         ],
     ],
 
@@ -49,8 +50,6 @@ return [
         'pre' => [
             '\\App\\Filter\\EncodingFilter',
             '\\App\\Filter\\TrimFilter',
-            '\\App\\Filter\\LimitBytesFilter',
-            '\\App\\Filter\\LimitLinesFilter',
             '\\App\\Filter\\IPv4Filter',
             '\\App\\Filter\\IPv6Filter',
             '\\App\\Filter\\IPv6ShortFilter',
@@ -86,12 +85,6 @@ return [
         'enabled' => true,
         // 受信任反向代理列表（用于识别客户端真实 IP，支持 CIDR 网段）
         'trustedProxies' => ['127.0.0.1', '::1', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'],
-        // 违规内容前置过滤规则
-        'contentRules' => [
-            'enabled' => true,
-            'keywords' => [],
-            'patterns' => [],
-        ],
         // 预设封禁 IP 列表与策略
         'ipBans' => [],
     ],
@@ -120,21 +113,6 @@ return [
         'cache_max_entries' => 10,
         'cache_high_watermark' => 10,
         'cache_low_watermark' => 7,
-    ],
-
-    /* ─── 统一事件队列（EventQueue）────────────────────────── */
-    'eventQueue' => [
-        // 是否启用异步事件队列（关闭时降级为同步执行）
-        'enabled' => true,
-        // Redis Stream 键名与消费组名
-        'stream' => 'events:log:stream',
-        'group' => 'log-event-workers',
-        // 单条事件最大尝试次数（含首次执行）；耗尽后进入死信流
-        'maxAttempts' => 3,
-        // 是否异步执行 SpinYarn 反混淆
-        'asyncDeobfuscate' => true,
-        // 是否异步执行关键词与正则安全审计
-        'asyncSecurityAudit' => true,
     ],
 
 ];

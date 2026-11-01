@@ -96,8 +96,8 @@ runCheck('GET /v1/limits 存储限制与大小配置', function () use ($baseUrl
         throw new RuntimeException("状态码非 200: {$res['status']}");
     }
     $json = json_decode($res['body'], true);
-    if (!isset($json['storageTime'], $json['maxLength'])) {
-        throw new RuntimeException("响应中缺少 storageTime 或 maxLength 字段: {$res['body']}");
+    if (!isset($json['storageTime'], $json['maxFiles'], $json['maxTotalBytes'])) {
+        throw new RuntimeException("响应中缺少 storageTime、maxFiles 或 maxTotalBytes 字段: {$res['body']}");
     }
 });
 
@@ -119,11 +119,11 @@ $logToken = null;
 
 runCheck('POST /v1/log 创建日志并包含附件文件', function () use ($baseUrl, &$logId, &$logToken) {
     $payload = (string) json_encode([
-        'content' => "[12:00:00] [Server thread/INFO]: Minecraft server starting\n[12:00:01] [Server thread/ERROR]: Exception in thread 'main' java.lang.RuntimeException: Test crash\n",
         'source' => 'e2e-runner/1.0',
         'files' => [
-            ['name' => 'crash-report.txt', 'data' => "Time: 2026-09-20\nDescription: Crash during e2e test\n"],
-            ['name' => 'server.properties', 'data' => "server-port=25565\nmotd=A Minecraft Server\n"],
+            ['name' => 'latest.log', 'content' => "[12:00:00] [Server thread/INFO]: Minecraft server starting\n[12:00:01] [Server thread/ERROR]: Exception in thread 'main' java.lang.RuntimeException: Test crash\n"],
+            ['name' => 'crash-report.txt', 'content' => "Time: 2026-09-20\nDescription: Crash during e2e test\n"],
+            ['name' => 'server.properties', 'content' => "server-port=25565\nmotd=A Minecraft Server\n"],
         ],
     ]);
 
@@ -149,56 +149,57 @@ runCheck('GET /v1/log/{id} 获取日志内容与附件元数据', function () us
     if (empty($json['success']) || $json['id'] !== $logId) {
         throw new RuntimeException("返回的日志 ID 不匹配: {$res['body']}");
     }
-    if (empty($json['lines']) || empty($json['size']) || empty($json['raw'])) {
-        throw new RuntimeException("元数据缺少 lines, size 或 raw 字段: {$res['body']}");
+    if (empty($json['lines']) || empty($json['size']) || empty($json['filesUrl'])) {
+        throw new RuntimeException("元数据缺少 lines, size 或 filesUrl 字段: {$res['body']}");
     }
-    if (!isset($json['files']) || count($json['files']) !== 2) {
-        throw new RuntimeException("附件文件列表数量不符合预期");
+    if (!isset($json['files']) || count($json['files']) !== 3) {
+        throw new RuntimeException("文件列表数量不符合预期");
+    }
+    if (empty($json['requiresFileSelection'])) {
+        throw new RuntimeException("多文件日志应要求选择文件");
     }
 });
 
-runCheck('GET /v1/raw/{id} 获取原始纯文本日志', function () use ($baseUrl, &$logId) {
+runCheck('GET /v1/raw/{id} 多文件返回文件列表', function () use ($baseUrl, &$logId) {
     $res = httpRequest('GET', "{$baseUrl}/v1/raw/{$logId}");
     if ($res['status'] !== 200) {
-        throw new RuntimeException("获取原始日志失败: {$res['status']}");
+        throw new RuntimeException("获取文件列表失败: {$res['status']}");
     }
-    if (!str_contains($res['body'], 'Minecraft server starting')) {
-        throw new RuntimeException("原始日志内容不匹配: {$res['body']}");
+    $json = json_decode($res['body'], true);
+    if (!is_array($json) || ($json['fileCount'] ?? 0) !== 3) {
+        throw new RuntimeException("文件列表不符合预期: {$res['body']}");
     }
 });
 
-runCheck('GET /v1/raw/{id}/{filename} 获取指定附加文件内容', function () use ($baseUrl, &$logId) {
-    $res = httpRequest('GET', "{$baseUrl}/v1/raw/{$logId}/crash-report.txt");
+runCheck('GET /v1/raw/{id}/{filename} 获取指定文件内容', function () use ($baseUrl, &$logId) {
+    $res = httpRequest('GET', "{$baseUrl}/v1/raw/{$logId}/latest.log");
     if ($res['status'] !== 200) {
         throw new RuntimeException("获取附加文件失败: {$res['status']}");
     }
-    if (!str_contains($res['body'], 'Crash during e2e test')) {
-        throw new RuntimeException("附加文件内容不匹配: {$res['body']}");
+    if (!str_contains($res['body'], 'Minecraft server starting')) {
+        throw new RuntimeException("文件内容不匹配: {$res['body']}");
     }
 });
 
-runCheck('GET /v1/insights/{id} Codex 日志特征解析', function () use ($baseUrl, &$logId) {
+runCheck('GET /v1/insights/{id} 多文件返回文件列表', function () use ($baseUrl, &$logId) {
     $res = httpRequest('GET', "{$baseUrl}/v1/insights/{$logId}");
+    if ($res['status'] !== 200) {
+        throw new RuntimeException("获取可分析文件列表失败: {$res['status']}");
+    }
+    $json = json_decode($res['body'], true);
+    if (!is_array($json) || ($json['fileCount'] ?? 0) !== 3) {
+        throw new RuntimeException("可分析文件列表不符合预期: {$res['body']}");
+    }
+});
+
+runCheck('GET /v1/insights/{id}/{filename} Codex 日志特征解析', function () use ($baseUrl, &$logId) {
+    $res = httpRequest('GET', "{$baseUrl}/v1/insights/{$logId}/latest.log");
     if ($res['status'] !== 200) {
         throw new RuntimeException("Codex insights 解析失败: {$res['status']}");
     }
     $json = json_decode($res['body'], true);
     if (!is_array($json)) {
         throw new RuntimeException("insights 响应非 JSON 结构: {$res['body']}");
-    }
-});
-
-runCheck('POST /v1/analyse 直发日志分析', function () use ($baseUrl) {
-    $payload = (string) json_encode([
-        'content' => "[12:00:00] [main/FATAL]: Failed to start the minecraft server\njava.lang.NullPointerException: Cannot invoke method\n",
-    ]);
-    $res = httpRequest('POST', "{$baseUrl}/v1/analyse", ['Content-Type' => 'application/json'], $payload);
-    if ($res['status'] !== 200) {
-        throw new RuntimeException("直发分析失败: {$res['status']}");
-    }
-    $json = json_decode($res['body'], true);
-    if (!is_array($json)) {
-        throw new RuntimeException("分析响应非合法结构");
     }
 });
 
@@ -263,7 +264,9 @@ if ($testWaf) {
 
     runCheck('OpenLiteWaf 白名单豁免验证 (带报错异常的日志 POST 放行)', function () use ($baseUrl) {
         $payload = (string) json_encode([
-            'content' => "[12:00:00] [ERROR]: org.sqlite.SQLiteException: [SQLITE_ERROR] syntax error near 'SELECT * FROM'\n",
+            'files' => [
+                ['name' => 'latest.log', 'content' => "[12:00:00] [ERROR]: org.sqlite.SQLiteException: [SQLITE_ERROR] syntax error near 'SELECT * FROM'\n"],
+            ],
         ]);
         $res = httpRequest('POST', "{$baseUrl}/v1/log", ['Content-Type' => 'application/json'], $payload);
         if ($res['status'] !== 200) {

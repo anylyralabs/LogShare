@@ -41,14 +41,14 @@ afterEach(function () {
 test('deduplicated upload keeps the original deletion token', function () {
     $tokenA = new Token();
     $logA = new App\Log();
-    $idA = $logA->put('identical body', $tokenA, [], 'src');
+    $idA = $logA->put([['name' => 'main.log', 'data' => 'identical body']], $tokenA, [], 'src');
 
     expect($idA)->not->toBeNull();
     expect($logA->wasDeduplicated())->toBeFalse();
 
     $tokenB = new Token();
     $logB = new App\Log();
-    $idB = $logB->put('identical body', $tokenB, [], 'src');
+    $idB = $logB->put([['name' => 'main.log', 'data' => 'identical body']], $tokenB, [], 'src');
 
     expect($idB->get())->toBe($idA->get());
     expect($logB->wasDeduplicated())->toBeTrue();
@@ -69,7 +69,7 @@ test('deduplicated upload does not overwrite the redis cache token', function ()
 
     $tokenA = new Token();
     $logA = new App\Log();
-    $idA = $logA->put('identical cached body', $tokenA, [], 'src');
+    $idA = $logA->put([['name' => 'main.log', 'data' => 'identical cached body']], $tokenA, [], 'src');
     expect($idA)->not->toBeNull();
 
     $cacheKey = 'log:' . $idA->getRaw();
@@ -77,7 +77,7 @@ test('deduplicated upload does not overwrite the redis cache token', function ()
     expect($cachedAfterFirst)->not->toBeNull();
 
     $tokenB = new Token();
-    (new App\Log())->put('identical cached body', $tokenB, [], 'src');
+    (new App\Log())->put([['name' => 'main.log', 'data' => 'identical cached body']], $tokenB, [], 'src');
     $cachedAfterSecond = App\Cache\RedisCache::Get($cacheKey);
 
     expect($cachedAfterSecond)->toBe($cachedAfterFirst);

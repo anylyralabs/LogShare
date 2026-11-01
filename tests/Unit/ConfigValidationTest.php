@@ -63,6 +63,20 @@ test('cache class must implement CacheInterface', function () {
     loadConfigArray(['cache' => ['cacheId' => \App\Data\Token::class]]);
 })->throws(InvalidArgumentException::class, 'must implement');
 
+test('Config load drops removed eventQueue and contentRules sections', function () {
+    $tmp = CORE_PATH . '/tmp/legacy_removed_' . uniqid() . '.php';
+    file_put_contents($tmp, "<?php return ['eventQueue' => ['enabled' => true], 'security' => ['contentRules' => ['keywords' => ['secret']]]];");
+
+    try {
+        Config::load($tmp);
+        expect(Config::all())->not->toHaveKey('eventQueue');
+        expect(Config::Get('security'))->not->toHaveKey('contentRules');
+    } finally {
+        @unlink($tmp);
+        Config::load(CORE_PATH . '/Config.inc.php');
+    }
+});
+
 test('Config load drops legacy ai and github sections', function () {
     $tmp = CORE_PATH . '/tmp/legacy_config_' . uniqid() . '.php';
     file_put_contents($tmp, "<?php return ['ai' => ['apiKeys' => ['sk-leaked']], 'github' => ['tokens' => ['ghp_leaked']]];");

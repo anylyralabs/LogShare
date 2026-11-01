@@ -16,8 +16,6 @@ use App\Filter\IPv6ShortFilter;
 use App\Filter\UsernameFilter;
 use App\Filter\AccessTokenFilter;
 use App\Filter\TrimFilter;
-use App\Filter\LimitBytesFilter;
-use App\Filter\LimitLinesFilter;
 
 return [
     'test_case' => TestCase::class,

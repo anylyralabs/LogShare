@@ -17,7 +17,7 @@ use App\Storage\StorageInterface;
  */
 final class InMemoryStorage implements StorageInterface
 {
-    /** @var array<string, array{data: string, token: ?string, metadata: array<int, mixed>, source: string, created: int, files: array<int, array{name: string, data: string, size: int}>}> */
+    /** @var array<string, array{token: ?string, metadata: array<int, mixed>, source: string, created: int, files: array<int, array{name: string, data: string, size: int}>}> */
     private static array $rows = [];
 
     /** @var array<string, string> fingerprint => raw id */
@@ -32,22 +32,23 @@ final class InMemoryStorage implements StorageInterface
         self::$sequence = 0;
     }
 
-    public static function Put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null, ?array $files = null, ?bool &$created = null): ?Id
+    public static function Put(array $files, ?Token $token = null, array $metadata = [], ?string $source = null, ?bool &$created = null): ?Id
     {
         $normalizedSource = ($source !== null && trim($source) !== '')
             ? mb_strcut(trim($source), 0, 64, 'UTF-8')
             : '未指定';
 
         $normalizedFiles = [];
-        foreach ($files ?? [] as $file) {
+        foreach ($files as $file) {
+            $data = (string) ($file['data'] ?? '');
             $normalizedFiles[] = [
                 'name' => (string) ($file['name'] ?? ''),
-                'data' => (string) ($file['data'] ?? ''),
-                'size' => isset($file['size']) ? (int) $file['size'] : strlen((string) ($file['data'] ?? '')),
+                'data' => $data,
+                'size' => isset($file['size']) ? (int) $file['size'] : strlen($data),
             ];
         }
 
-        $fingerprint = MariaDbStorage::fingerprint($data, $normalizedFiles, $normalizedSource);
+        $fingerprint = MariaDbStorage::fingerprint($normalizedFiles, $normalizedSource);
         if (isset(self::$fingerprints[$fingerprint], self::$rows[self::$fingerprints[$fingerprint]])) {
             $created = false;
             return Id::fromRaw('s', self::$fingerprints[$fingerprint]);
@@ -57,7 +58,6 @@ final class InMemoryStorage implements StorageInterface
         $rawId = sprintf('%06d', ++self::$sequence);
         self::$fingerprints[$fingerprint] = $rawId;
         self::$rows[$rawId] = [
-            'data' => $data,
             'token' => $token?->normalizedValue(),
             'metadata' => array_map(static fn(MetadataEntry $entry): array => $entry->jsonSerialize(), $metadata),
             'source' => $normalizedSource,
@@ -66,29 +66,6 @@ final class InMemoryStorage implements StorageInterface
         ];
 
         return Id::fromRaw('s', $rawId);
-    }
-
-    public static function Update(Id $id, string $data, ?array $files = null): bool
-    {
-        $rawId = $id->getRaw();
-        if (!isset(self::$rows[$rawId])) {
-            return false;
-        }
-
-        self::$rows[$rawId]['data'] = $data;
-        if ($files !== null) {
-            $normalized = [];
-            foreach ($files as $file) {
-                $normalized[] = [
-                    'name' => (string) ($file['name'] ?? ''),
-                    'data' => (string) ($file['data'] ?? ''),
-                    'size' => isset($file['size']) ? (int) $file['size'] : strlen((string) ($file['data'] ?? '')),
-                ];
-            }
-            self::$rows[$rawId]['files'] = $normalized;
-        }
-
-        return true;
     }
 
     public static function Get(Id $id, bool $includeContent = true): ?array
@@ -108,7 +85,6 @@ final class InMemoryStorage implements StorageInterface
         }
 
         return [
-            'data' => $row['data'],
             'token' => $row['token'],
             'metadata' => $row['metadata'],
             'source' => $row['source'],

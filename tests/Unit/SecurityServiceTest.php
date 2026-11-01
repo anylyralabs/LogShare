@@ -2,7 +2,6 @@
 
 use App\ApiError;
 use App\Config;
-use App\Controller\AnalyseController;
 use App\Controller\LogController;
 use App\System\SecurityService;
 use Tests\Mocks\RedisMock;
@@ -14,13 +13,7 @@ beforeEach(function () {
 
     $cfg = $this->origData;
     $cfg['security']['enabled'] = true;
-    $cfg['security']['contentRules'] = [
-        'enabled' => true,
-        'keywords' => [],
-        'patterns' => [],
-    ];
     $cfg['security']['ipBans'] = [];
-    $cfg['eventQueue']['asyncSecurityAudit'] = false;
     $this->dataProp->setValue(null, $cfg);
 
     RedisMock::reset();
@@ -46,13 +39,9 @@ afterEach(function () {
     \App\Client\RedisClient::setTestConnection(null);
     RedisMock::reset();
 
-    foreach ([
-        CORE_PATH . '/runtime/content_reject_rules.json',
-        CORE_PATH . '/runtime/security_bans.json',
-    ] as $file) {
-        if (is_file($file)) {
-            @unlink($file);
-        }
+    $bansFile = CORE_PATH . '/runtime/security_bans.json';
+    if (is_file($bansFile)) {
+        @unlink($bansFile);
     }
     $this->dataProp->setValue(null, $this->origData);
 });
@@ -66,26 +55,6 @@ test('SecurityService bans an IP and reports the ban state', function () {
     expect($banResult['ip'])->toBe($testIp);
     expect($banResult['reason'])->toBe('Malicious crawling test');
     expect(SecurityService::isIpBanned($testIp))->toBeTrue();
-});
-
-test('SecurityService validates configured content rules', function () {
-    $cfg = $this->dataProp->getValue();
-    $cfg['security']['contentRules'] = [
-        'enabled' => true,
-        'keywords' => ['bad-malware-payload', 'cheat-distro-link'],
-        'patterns' => ['/trojan_v\d+/i'],
-    ];
-    $this->dataProp->setValue(null, $cfg);
-
-    $rules = SecurityService::getContentRules();
-    expect($rules['enabled'])->toBeTrue();
-    expect($rules['keywords'])->toContain('bad-malware-payload');
-
-    expect(fn() => SecurityService::validateContent('Normal minecraft log'))->not->toThrow(ApiError::class);
-    expect(fn() => SecurityService::validateContent('Some log with bad-malware-payload included'))
-        ->toThrow(ApiError::class);
-    expect(fn() => SecurityService::validateContent('Detected signature trojan_v2'))
-        ->toThrow(ApiError::class);
 });
 
 test('SecurityService resolveClientIp handles trusted reverse proxies and prevents spoofing', function () {
@@ -102,13 +71,16 @@ test('SecurityService resolveClientIp handles trusted reverse proxies and preven
     expect(SecurityService::resolveClientIp($serverParamsSpoof, $headersSpoof))->toBe('198.51.100.99');
 });
 
-test('LogController and AnalyseController enforce IP ban and content rules', function () {
+test('LogController still rejects banned IPs', function () {
     $bannedIp = '203.0.113.77';
     SecurityService::banIp($bannedIp, 3600, 'Test ban');
 
+    $payload = json_encode([
+        'files' => [['name' => 'latest.log', 'content' => 'hello']],
+    ]);
     $bannedStream = Mockery::mock(\Psr\Http\Message\StreamInterface::class);
-    $bannedStream->shouldReceive('getContents')->andReturn(json_encode(['content' => 'hello']));
-    $bannedStream->shouldReceive('__toString')->andReturn(json_encode(['content' => 'hello']));
+    $bannedStream->shouldReceive('getContents')->andReturn($payload);
+    $bannedStream->shouldReceive('__toString')->andReturn($payload);
 
     $bannedReq = Mockery::mock(\Hyperf\HttpServer\Contract\RequestInterface::class);
     $bannedReq->shouldReceive('getServerParams')->andReturn(['remote_addr' => '172.18.0.2']);
@@ -117,7 +89,9 @@ test('LogController and AnalyseController enforce IP ban and content rules', fun
     $bannedReq->shouldReceive('getHeaderLine')->with('Content-Encoding')->andReturn('');
     $bannedReq->shouldReceive('getBody')->andReturn($bannedStream);
     $bannedReq->shouldReceive('getUploadedFiles')->andReturn([]);
-    $bannedReq->shouldReceive('getParsedBody')->andReturn(['content' => 'hello']);
+    $bannedReq->shouldReceive('getParsedBody')->andReturn([
+        'files' => [['name' => 'latest.log', 'content' => 'hello']],
+    ]);
 
     $refLog = new ReflectionClass(LogController::class);
     $logController = $refLog->newInstanceWithoutConstructor();
@@ -129,50 +103,5 @@ test('LogController and AnalyseController enforce IP ban and content rules', fun
     } catch (ApiError $e) {
         expect($e->getCode())->toBe(403);
         expect($e->getMessage())->toContain('blocked');
-    }
-
-    $cfg = $this->dataProp->getValue();
-    $cfg['security']['contentRules'] = [
-        'enabled' => true,
-        'keywords' => ['forbidden_secret_payload'],
-        'patterns' => [],
-    ];
-    $this->dataProp->setValue(null, $cfg);
-
-    $badContentStream = Mockery::mock(\Psr\Http\Message\StreamInterface::class);
-    $badContentPayload = json_encode(['content' => 'Notice: forbidden_secret_payload detected']);
-    $badContentStream->shouldReceive('getContents')->andReturn($badContentPayload);
-    $badContentStream->shouldReceive('__toString')->andReturn($badContentPayload);
-
-    $badContentReq = Mockery::mock(\Hyperf\HttpServer\Contract\RequestInterface::class);
-    $badContentReq->shouldReceive('getServerParams')->andReturn(['remote_addr' => '127.0.0.1']);
-    $badContentReq->shouldReceive('getHeaders')->andReturn([]);
-    $badContentReq->shouldReceive('getHeaderLine')->with('Content-Type')->andReturn('application/json');
-    $badContentReq->shouldReceive('getHeaderLine')->with('Content-Encoding')->andReturn('');
-    $badContentReq->shouldReceive('getBody')->andReturn($badContentStream);
-    $badContentReq->shouldReceive('getUploadedFiles')->andReturn([]);
-    $badContentReq->shouldReceive('getParsedBody')->andReturn(['content' => 'Notice: forbidden_secret_payload detected']);
-
-    $badContentCtrl = $refLog->newInstanceWithoutConstructor();
-    $refLog->getProperty('request')->setValue($badContentCtrl, $badContentReq);
-
-    try {
-        $badContentCtrl->create();
-        test()->fail('Expected ApiError 400 was not thrown for prohibited content in LogController');
-    } catch (ApiError $e) {
-        expect($e->getCode())->toBe(400);
-        expect($e->getMessage())->toContain('prohibited keyword');
-    }
-
-    $refAnalyse = new ReflectionClass(AnalyseController::class);
-    $analyseCtrl = $refAnalyse->newInstanceWithoutConstructor();
-    $refAnalyse->getProperty('request')->setValue($analyseCtrl, $badContentReq);
-
-    try {
-        $analyseCtrl->analyse();
-        test()->fail('Expected ApiError 400 was not thrown in AnalyseController');
-    } catch (ApiError $e) {
-        expect($e->getCode())->toBe(400);
-        expect($e->getMessage())->toContain('prohibited keyword');
     }
 });

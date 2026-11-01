@@ -6,7 +6,10 @@ use App\Data\MetadataEntry;
 use Hyperf\HttpServer\Contract\RequestInterface;
 
 /**
- * Utility class for reading log content from the http request
+ * Utility class for reading a log upload from the HTTP request.
+ *
+ * 上传契约只有文件列表：`files[] = {name, content}`。不再接受 `content`
+ * 主日志字段，也不支持单独的“正文”。
  */
 class ContentParser
 {
@@ -17,7 +20,8 @@ class ContentParser
     }
 
     /**
-     * Get all supported content encodings
+     * Get all supported content encodings.
+     *
      * @return string[]
      */
     public static function getSupportedEncodings(): array
@@ -26,14 +30,15 @@ class ContentParser
     }
 
     /**
-     * Get the content from the http request
+     * Get the upload payload from the HTTP request.
      *
-     * @return string|ApiError|array<string, mixed> The content string, an ApiError on failure, or array for JSON requests
+     * @return array<string, mixed>|ApiError
      */
-    public function getContent(): string|ApiError|array
+    public function getContent(): array|ApiError
     {
         $config = \App\Config::Get('storage');
-        $limit = ((int) ($config['maxLength'] ?? (10 * 1024 * 1024))) * 2;
+        $uploadConfig = $config['uploadFiles'] ?? [];
+        $limit = (int) ($uploadConfig['maxRequestBodyBytes'] ?? (32 * 1024 * 1024));
 
         $body = $this->request->getBody()->getContents();
         if (strlen($body) > $limit) {
@@ -101,44 +106,39 @@ class ContentParser
     }
 
     /**
-     * 解析 JSON 与 urlencoded 表单的结构化字段（content / metadata / source / files）。
+     * 解析上传字段（files / metadata / source）。
      *
      * @param array<array-key, mixed> $data
      * @return array<string, mixed>|ApiError
      */
     protected function parseJsonData(array $data): array|ApiError
     {
-        $hasFiles = !empty($data['files']) && is_array($data['files']);
-
-        if (!$hasFiles && !isset($data['content'])) {
-            return new ApiError(400, "Required field 'content' not found.");
+        if (isset($data['content'])) {
+            return new ApiError(400, "Field 'content' is no longer supported; put every log in 'files'.");
         }
 
-        // When files are provided, content is optional (primary file is files[0])
-        if (!isset($data['content'])) {
-            $data['content'] = '';
+        if (!isset($data['files']) || !is_array($data['files']) || $data['files'] === []) {
+            return new ApiError(400, "Required field 'files' not found or empty.");
         }
 
-        if (empty($data['content']) && !$hasFiles) {
-            return new ApiError(400, "Required field 'content' is empty.");
+        $files = UploadParser::parseFiles($data['files']);
+        if ($files instanceof ApiError) {
+            return $files;
         }
-
-        if (!is_string($data['content'])) {
-            return new ApiError(400, "Field 'content' must be a string.");
+        if ($files === []) {
+            return new ApiError(400, "Required field 'files' not found or empty.");
         }
 
         $result = [
-            'content' => $data['content'],
+            'files' => $files,
             'metadata' => [],
-            'source' => null
+            'source' => null,
         ];
 
-        // Parse metadata if provided
         if (isset($data['metadata']) && is_array($data['metadata'])) {
             $result['metadata'] = MetadataEntry::allFromArray($data['metadata']);
         }
 
-        // Parse source if provided, or fallback to User-Agent launcher format, otherwise '未指定'
         if (isset($data['source']) && is_string($data['source']) && trim($data['source']) !== '') {
             // 按字符截断：按字节截断会把中文启动器名切成非法 UTF-8，
             // 写 utf8mb4 时报 1366，或让 json_encode 直接失败。
@@ -153,20 +153,6 @@ class ContentParser
             }
         }
 
-        // Parse optional log id (kept for request compatibility)
-        if (isset($data['id']) && is_string($data['id'])) {
-            $result['id'] = substr($data['id'], 0, 64);
-        }
-
-        // Parse additional files (multi-file uploads)
-        if (isset($data['files']) && is_array($data['files'])) {
-            $files = UploadParser::parseFiles($data['files']);
-            if ($files instanceof ApiError) {
-                return $files;
-            }
-            $result['files'] = $files;
-        }
-
         return $result;
     }
 
@@ -175,9 +161,6 @@ class ContentParser
      *
      * 过滤掉通用浏览器（Mozilla/Chrome/Safari等）、通用HTTP工具（curl/Postman/okhttp等）
      * 以及非“名称/版本”结构的普通UA。
-     *
-     * @param string|null $userAgent
-     * @return string|null 合法的启动器来源标识（≤64字符），若不符合则返回 null
      */
     public static function parseLauncherSource(?string $userAgent): ?string
     {

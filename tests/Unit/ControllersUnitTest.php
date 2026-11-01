@@ -64,8 +64,10 @@ test('LimitsController returns storage limits json', function () {
 
     expect($resp->getStatusCode())->toBe(200);
     $body = json_decode((string) $resp->getBody(), true);
-    expect($body)->toHaveKeys(['storageTime', 'maxLength', 'maxLines']);
-    expect($body['maxLines'])->toBe(50000);
+    expect($body)->toHaveKeys(['storageTime', 'maxFiles', 'maxTotalBytes', 'maxRequestBodyBytes']);
+    expect($body['maxFiles'])->toBe(200);
+    expect($body['maxTotalBytes'])->toBe(20971520);
+    expect($body['maxRequestBodyBytes'])->toBe(33554432);
 });
 
 test('IndexController returns all registered public endpoints', function () {
@@ -79,41 +81,57 @@ test('IndexController returns all registered public endpoints', function () {
     expect($endpoints)->toContain('GET /v1/limits');
     expect($endpoints)->toContain('POST /v1/log');
     expect($endpoints)->toContain('GET /1/limits');
+    expect($endpoints)->toContain('GET /v1/insights/{id}/{filename:.+}');
+    expect($endpoints)->not->toContain('POST /v1/analyse');
 });
 
-test('RawController serves raw log and files or throws 404', function () {
-    $controller = instantiateController(RawController::class);
+test('RawController serves single files and lists multiple files', function () {
+    $mockUri = Mockery::mock(\Psr\Http\Message\UriInterface::class);
+    $mockUri->shouldReceive('getPath')->andReturn('/v1/raw/f123456');
+    $mockReq = Mockery::mock(RequestInterface::class);
+    $mockReq->shouldReceive('getUri')->andReturn($mockUri);
+    $controller = instantiateController(RawController::class, $mockReq);
 
     // 1. 404 for nonexistent log
     expect(fn() => $controller->raw('f000000'))->toThrow(ApiError::class);
     expect(fn() => $controller->rawFile('f000000', 'crash.txt'))->toThrow(ApiError::class);
 
-    // 2. Put real log with attachment
+    // 2. Single file: raw/{id} serves the file directly
     $log = new Log();
-    $id = $log->put(
-        "Line 1 content\nLine 2 content",
-        null,
-        [],
-        'test-client',
-        [['name' => 'crash-reports/crash.txt', 'data' => "Exception in thread\n"]]
-    );
+    $id = $log->put([
+        ['name' => 'latest.log', 'data' => "Line 1 content\nLine 2 content"],
+    ], null, [], 'test-client');
     $rawId = $id->get();
 
-    // 3. Serve raw main log
     $mainResp = $controller->raw($rawId);
     expect($mainResp->getStatusCode())->toBe(200);
     expect((string) $mainResp->getBody())->toContain('Line 1 content');
 
-    // 4. Serve raw attachment file
-    $fileResp = $controller->rawFile($rawId, 'crash-reports/crash.txt');
+    // 3. Multiple files: raw/{id} returns a 200 file list
+    $log2 = new Log();
+    $id2 = $log2->put([
+        ['name' => 'latest.log', 'data' => "main log\n"],
+        ['name' => 'crash-reports/crash.txt', 'data' => "Exception in thread\n"],
+    ], null, [], 'test-client');
+    $multiId = $id2->get();
+
+    $multiResp = $controller->raw($multiId);
+    expect($multiResp->getStatusCode())->toBe(200);
+    $multiBody = json_decode((string) $multiResp->getBody(), true);
+    expect($multiBody['fileCount'])->toBe(2);
+    expect($multiBody['requiresFileSelection'])->toBeTrue();
+    expect(array_column($multiBody['files'], 'name'))->toContain('crash-reports/crash.txt');
+
+    // 4. Explicit filename always serves content
+    $fileResp = $controller->rawFile($multiId, 'crash-reports/crash.txt');
     expect($fileResp->getStatusCode())->toBe(200);
     expect((string) $fileResp->getBody())->toContain('Exception in thread');
 
-    // 5. 404 for missing attachment
-    expect(fn() => $controller->rawFile($rawId, 'not-exist.txt'))->toThrow(ApiError::class);
+    // 5. 404 for missing file
+    expect(fn() => $controller->rawFile($multiId, 'not-exist.txt'))->toThrow(ApiError::class);
 });
 
-test('LogMetaController returns metadata or throws 404', function () {
+test('LogMetaController returns metadata and the file list', function () {
     $mockUri = Mockery::mock(\Psr\Http\Message\UriInterface::class);
     $mockUri->shouldReceive('getPath')->andReturn('/v1/log/f123456');
     $mockReq = Mockery::mock(RequestInterface::class);
@@ -124,11 +142,12 @@ test('LogMetaController returns metadata or throws 404', function () {
     // 1. 404 for nonexistent log
     expect(fn() => $controller->meta('f000000'))->toThrow(ApiError::class);
 
-    // 2. Put log with attachment
+    // 2. Put log with two files
     $log = new Log();
-    $id = $log->put("Meta check log\n", null, [], 'launcher/1.0.0', [
+    $id = $log->put([
+        ['name' => 'latest.log', 'data' => "Meta check log\n"],
         ['name' => 'extra.txt', 'data' => 'extra'],
-    ]);
+    ], null, [], 'launcher/1.0.0');
     $rawId = $id->get();
 
     // 3. Retrieve metadata
@@ -138,33 +157,57 @@ test('LogMetaController returns metadata or throws 404', function () {
     expect($body['success'])->toBeTrue();
     expect($body['id'])->toBe($rawId);
     expect($body['source'])->toBe('launcher/1.0.0');
-    expect($body['raw'])->toContain('/v1/raw/' . $rawId);
+    expect($body['filesUrl'])->toContain('/v1/log/' . $rawId);
+    expect($body)->not->toHaveKey('raw');
     $fileNames = array_column($body['files'], 'name');
     expect($fileNames)->toContain('extra.txt');
+    expect($body['files'][0])->toHaveKeys(['name', 'size', 'lines', 'raw', 'insights']);
 });
 
-test('InsightsController returns analysis json or throws 404', function () {
-    $controller = instantiateController(InsightsController::class);
+test('InsightsController analyses single files and lists multiple files', function () {
+    $mockUri = Mockery::mock(\Psr\Http\Message\UriInterface::class);
+    $mockUri->shouldReceive('getPath')->andReturn('/v1/insights/f123456');
+    $mockReq = Mockery::mock(RequestInterface::class);
+    $mockReq->shouldReceive('getUri')->andReturn($mockUri);
+    $controller = instantiateController(InsightsController::class, $mockReq);
 
     // 1. 404 for nonexistent log
     expect(fn() => $controller->insights('f000000'))->toThrow(ApiError::class);
 
-    // 2. Put log
+    // 2. Single file
     $log = new Log();
-    $id = $log->put("Minecraft crash log\n", null, [], null, null);
+    $id = $log->put([
+        ['name' => 'latest.log', 'data' => "Minecraft crash log\n"],
+    ], null, [], null);
     $rawId = $id->get();
 
-    // 3. Get insights
     $resp = $controller->insights($rawId);
     expect($resp->getStatusCode())->toBe(200);
     expect((string) $resp->getBody())->not->toBeEmpty();
+
+    // 3. Multiple files return a 200 list instead of guessing
+    $log2 = new Log();
+    $id2 = $log2->put([
+        ['name' => 'latest.log', 'data' => "Minecraft crash log\n"],
+        ['name' => 'crash.txt', 'data' => "Crash\n"],
+    ], null, [], null);
+    $multiResp = $controller->insights($id2->get());
+    expect($multiResp->getStatusCode())->toBe(200);
+    $multiBody = json_decode((string) $multiResp->getBody(), true);
+    expect($multiBody['fileCount'])->toBe(2);
+    expect($multiBody['requiresFileSelection'])->toBeTrue();
+
+    // 4. Explicit filename analyses that file
+    $fileResp = $controller->insightsFile($id2->get(), 'crash.txt');
+    expect($fileResp->getStatusCode())->toBe(200);
+    expect((string) $fileResp->getBody())->not->toBeEmpty();
 });
 
 test('LogController creates log and enforces token on delete', function () {
     $jsonPayload = json_encode([
-        'content' => "Server start log\n",
         'files' => [
-            ['name' => 'crash.txt', 'data' => "Crash content\n"],
+            ['name' => 'server.log', 'content' => "Server start log\n"],
+            ['name' => 'crash.txt', 'content' => "Crash content\n"],
         ],
     ]);
     $mockStream = Mockery::mock(\Psr\Http\Message\StreamInterface::class);
@@ -183,9 +226,9 @@ test('LogController creates log and enforces token on delete', function () {
     $mockReq->shouldReceive('getBody')->andReturn($mockStream);
     $mockReq->shouldReceive('getUploadedFiles')->andReturn([]);
     $mockReq->shouldReceive('getParsedBody')->andReturn([
-        'content' => "Server start log\n",
         'files' => [
-            ['name' => 'crash.txt', 'data' => "Crash content\n"],
+            ['name' => 'server.log', 'content' => "Server start log\n"],
+            ['name' => 'crash.txt', 'content' => "Crash content\n"],
         ],
     ]);
 
@@ -227,25 +270,4 @@ test('LogController creates log and enforces token on delete', function () {
     expect($againResp->getStatusCode())->toBe(400);
     $againBody = json_decode((string) $againResp->getBody(), true);
     expect($againBody['errors'][0]['code'])->toBe(404);
-});
-
-test('AnalyseController parses content and returns analysis json', function () {
-    $payload = json_encode(['content' => "Test server log\n"]);
-    $mockStream = Mockery::mock(\Psr\Http\Message\StreamInterface::class);
-    $mockStream->shouldReceive('getContents')->andReturn($payload);
-    $mockStream->shouldReceive('__toString')->andReturn($payload);
-
-    $mockReq = Mockery::mock(RequestInterface::class);
-    $mockReq->shouldReceive('getParsedBody')->andReturn(['content' => "Test server log\n"]);
-    $mockReq->shouldReceive('getHeaderLine')->with('Content-Type')->andReturn('application/json');
-    $mockReq->shouldReceive('getHeaderLine')->with('Content-Encoding')->andReturn('');
-    $mockReq->shouldReceive('getUploadedFiles')->andReturn([]);
-    $mockReq->shouldReceive('getBody')->andReturn($mockStream);
-
-    $controller = instantiateController(\App\Controller\AnalyseController::class, $mockReq);
-    $resp = $controller->analyse();
-    expect($resp->getStatusCode())->toBe(200);
-    expect((string) $resp->getBody())->not->toBeEmpty();
-    $body = json_decode((string) $resp->getBody(), true);
-    expect($body)->toBeArray();
 });

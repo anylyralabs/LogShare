@@ -49,17 +49,33 @@ test('Log exposes additional file accessors', function () {
     expect($log->getFileLineNumbers('missing'))->toBe(0);
 });
 
+test('Log allows a single file larger than the legacy body limit', function () {
+    $cfg = $this->dataProp->getValue();
+    $cfg['storage']['uploadFiles']['maxTotalBytes'] = 1000;
+    $this->dataProp->setValue(null, $cfg);
+
+    $log = new \App\Log();
+    $id = $log->put([
+        ['name' => 'attachment.txt', 'data' => str_repeat('x', 50)],
+    ], null, [], 'src');
+
+    expect($id)->not->toBeNull();
+    $loaded = new \App\Log($id);
+    expect(strlen((string) $loaded->getFile('attachment.txt')))->toBe(50);
+});
+
 test('Log put applies pre filters to additional files', function () {
     $ip = 'AccessToken: 550e8400-e29b-41d4-a716-446655440000';
     $log = new \App\Log();
-    $id = $log->put('main line ' . $ip, null, [], 's', [
+    $id = $log->put([
+        ['name' => 'main.log', 'data' => 'main line ' . $ip],
         ['name' => 'extra.log', 'data' => 'extra ' . $ip],
-    ]);
+    ], null, [], 's');
 
     expect($id)->not->toBeNull();
     $loaded = new \App\Log($id);
     expect($loaded->exists())->toBeTrue();
-    expect($loaded->getContent())->not->toContain('550e8400');
+    expect($loaded->getFile('main.log'))->not->toContain('550e8400');
     expect($loaded->getFile('extra.log'))->not->toContain('550e8400');
     expect($loaded->getFile('extra.log'))->toContain('extra ');
 

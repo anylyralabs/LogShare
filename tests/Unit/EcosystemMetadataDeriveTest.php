@@ -4,8 +4,7 @@ use App\Data\MetadataEntry;
 use App\Log;
 
 /**
- * 复刻 put() 的调用顺序：先 analyse() 再 deriveEcosystemMetadata()，但不落库，
- * 避免测试依赖 MariaDB / 内存存储后端。
+ * 复刻 put() 的元数据补全顺序：先由反混淆阶段识别日志，再合并客户端元数据。
  *
  * 返回 [key, value] 配对列表而非映射，以便断言「同一键不会被追加两次」。
  *
@@ -15,8 +14,10 @@ use App\Log;
 function ecosystemDerivePairs(string $content, array $clientMetadata = []): array
 {
     $log = new Log();
-    (new ReflectionProperty(Log::class, 'data'))->setValue($log, $content);
-    $log->analyse();
+    $detected = $log->analyseContent($content);
+    if ($detected instanceof \Aternos\Codex\Minecraft\Log\Minecraft\MinecraftLog) {
+        (new ReflectionProperty(Log::class, 'detectedLog'))->setValue($log, $detected);
+    }
 
     $entries = (new ReflectionMethod(Log::class, 'deriveEcosystemMetadata'))->invoke($log, $clientMetadata);
 
@@ -48,8 +49,8 @@ test('non minecraft logs gain no ecosystem metadata', function () {
 
 test('derived entries carry display labels the clients render directly', function () {
     $log = new Log();
-    (new ReflectionProperty(Log::class, 'data'))->setValue($log, FABRIC_LOG);
-    $log->analyse();
+    $detected = $log->analyseContent(FABRIC_LOG);
+    (new ReflectionProperty(Log::class, 'detectedLog'))->setValue($log, $detected);
 
     /** @var MetadataEntry[] $entries */
     $entries = (new ReflectionMethod(Log::class, 'deriveEcosystemMetadata'))->invoke($log, []);

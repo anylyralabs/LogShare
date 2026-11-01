@@ -13,11 +13,13 @@ class LimitsController extends AbstractController
     public function limits(): ResponseInterface
     {
         $config = \App\Config::Get('storage');
+        $upload = $config['uploadFiles'] ?? [];
 
         return $this->respondJson([
             'storageTime' => (int) ($config['storageTime'] ?? (7 * 24 * 60 * 60)),
-            'maxLength' => (int) ($config['maxLength'] ?? (10 * 1024 * 1024)),
-            'maxLines' => (int) ($config['maxLines'] ?? 50_000),
+            'maxFiles' => (int) ($upload['maxFiles'] ?? 200),
+            'maxTotalBytes' => (int) ($upload['maxTotalBytes'] ?? (20 * 1024 * 1024)),
+            'maxRequestBodyBytes' => (int) ($upload['maxRequestBodyBytes'] ?? (32 * 1024 * 1024)),
         ]);
     }
 }

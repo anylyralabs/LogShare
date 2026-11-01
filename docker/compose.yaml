@@ -120,7 +120,8 @@ services:
     logging: *default-logging
     image: mariadb:11.8
     container_name: logshare-mariadb
-    command: --event-scheduler=ON
+    # 单文件不设上限，20 MiB 总预算需要 MariaDB 放宽单包上限
+    command: --event-scheduler=ON --max-allowed-packet=64M
     environment:
       MARIADB_DATABASE: logshare
       MARIADB_USER: logshare

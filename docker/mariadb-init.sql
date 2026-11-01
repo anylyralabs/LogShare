@@ -14,8 +14,8 @@
 --      日期分区覆盖的行，保证写入永不因「Table has no partition for value」
 --      失败；日期分区由事件安装过程铺设（见 scripts/sync_mariadb_events.php），
 --      运行期不补齐，只做丢弃。
--- 5. 迁移提示：本结构与旧结构不兼容（主键变更 + 移除外键）。旧库需清空重建，
---      新表结构以本文件为准。
+-- 5. 迁移提示：本结构与旧结构不兼容（移除 logs.data，日志只由 log_files 承载）。
+--      旧库需清空重建，新表结构以本文件为准。
 --
 -- 注：DDL 不接受表达式，分区边界必须是编译期常量，因此这里只声明兜底分区。
 -- 首轮事件（cleanup_expired_logs）会为「今天起未来 14 天」建立实际日分区；
@@ -23,7 +23,6 @@
 
 CREATE TABLE IF NOT EXISTS logs (
     id CHAR(6) NOT NULL,
-    data LONGTEXT NOT NULL,
     -- 删除凭证的存储形态是 `sha256:<64 位十六进制>`（71 字符）。
     -- 列宽必须留足，否则插入会以 1406 Data too long 失败。
     token VARCHAR(80) NULL,

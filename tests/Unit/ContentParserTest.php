@@ -10,7 +10,7 @@ afterEach(function () {
     $this->dataProp->setValue(null, $this->origData);
 });
 
-function parseJsonViaContentParser(array $data): string|App\ApiError|array
+function parseJsonViaContentParser(array $data): App\ApiError|array
 {
     $request = Mockery::mock(\Hyperf\HttpServer\Contract\RequestInterface::class);
     $request->shouldReceive('getHeaderLine')->with('User-Agent')->byDefault()->andReturn('');
@@ -20,46 +20,41 @@ function parseJsonViaContentParser(array $data): string|App\ApiError|array
     return $method->invoke($parser, $data);
 }
 
-test('parseJsonData extracts content, metadata and source', function () {
+test('parseJsonData extracts files, metadata and source', function () {
     $result = parseJsonViaContentParser([
-        'content' => 'log line',
+        'files' => [
+            ['name' => 'latest.log', 'content' => 'log line'],
+        ],
         'metadata' => [['key' => 'k', 'value' => 'v']],
         'source' => 'my-server',
     ]);
 
     expect($result)->toBeArray();
-    expect($result['content'])->toBe('log line');
+    expect($result)->not->toHaveKey('content');
+    expect($result['files'])->toHaveCount(1);
+    expect($result['files'][0])->toMatchArray(['name' => 'latest.log', 'data' => 'log line']);
     expect($result['source'])->toBe('my-server');
     expect($result['metadata'])->toHaveCount(1);
 });
 
-test('parseJsonData requires content', function () {
-    $result = parseJsonViaContentParser([]);
-    expect($result)->toBeInstanceOf(App\ApiError::class);
-    expect($result->getHttpCode())->toBe(400);
-
-    $result = parseJsonViaContentParser(['content' => '']);
-    expect($result)->toBeInstanceOf(App\ApiError::class);
-
-    $result = parseJsonViaContentParser(['content' => 123]);
-    expect($result)->toBeInstanceOf(App\ApiError::class);
+test('parseJsonData requires a non-empty files array', function () {
+    foreach ([[], ['files' => []], ['files' => 'not-an-array'], ['files' => null]] as $payload) {
+        $result = parseJsonViaContentParser($payload);
+        expect($result)->toBeInstanceOf(App\ApiError::class);
+        expect($result->getHttpCode())->toBe(400);
+    }
 });
 
-test('parseJsonData allows omitted content when files are provided', function () {
-    $result = parseJsonViaContentParser([
-        'files' => [
-            ['name' => 'latest.log', 'content' => "[12:00] INFO: start\n"],
-        ],
-    ]);
+test('parseJsonData rejects the removed content field', function () {
+    $result = parseJsonViaContentParser(['content' => 'legacy body']);
 
-    expect($result)->toBeArray();
-    expect($result['content'])->toBe('');
-    expect($result['files'])->toHaveCount(1);
+    expect($result)->toBeInstanceOf(App\ApiError::class);
+    expect($result->getHttpCode())->toBe(400);
+    expect($result->getMessage())->toContain("content");
 });
 
 test('parseJsonData parses files array via App\UploadParser', function () {
     $result = parseJsonViaContentParser([
-        'content' => 'main',
         'files' => [
             ['name' => 'a.log', 'content' => 'aaa'],
             ['name' => 'b.log', 'content' => 'bbb'],
@@ -73,7 +68,6 @@ test('parseJsonData parses files array via App\UploadParser', function () {
 
 test('parseJsonData rejects invalid files via App\UploadParser', function () {
     $result = parseJsonViaContentParser([
-        'content' => 'main',
         'files' => [
             ['name' => '../evil.log', 'content' => 'bad'],
         ],
@@ -83,24 +77,21 @@ test('parseJsonData rejects invalid files via App\UploadParser', function () {
     expect($result->getHttpCode())->toBe(400);
 });
 
-test('parseJsonData rejects non-array files field', function () {
-    $result = parseJsonViaContentParser(['content' => 'x', 'files' => 'not-an-array']);
-    expect($result)->toBeArray();
-    expect(isset($result['files']))->toBeFalse();
-});
-
 test('parseJsonData truncates source to 64 characters', function () {
     $result = parseJsonViaContentParser([
-        'content' => 'x',
+        'files' => [['name' => 'x.log', 'content' => 'x']],
         'source' => str_repeat('源', 100),
     ]);
 
+    expect($result)->toBeArray();
     expect(mb_strlen($result['source'], 'UTF-8'))->toBe(64);
 });
 
-test('ContentParser parses form-urlencoded metadata and source', function () {
+test('ContentParser parses form-urlencoded files, metadata and source', function () {
     $payload = http_build_query([
-        'content' => 'form log line',
+        'files' => [
+            ['name' => 'form.log', 'content' => 'form log line'],
+        ],
         'metadata' => [
             ['key' => 'version', 'value' => '1.20.1', 'label' => 'Minecraft 版本', 'visible' => true],
             ['key' => 'private', 'value' => 'hidden', 'visible' => false],
@@ -120,7 +111,8 @@ test('ContentParser parses form-urlencoded metadata and source', function () {
     $result = $parser->getContent();
 
     expect($result)->toBeArray();
-    expect($result['content'])->toBe('form log line');
+    expect($result['files'])->toHaveCount(1);
+    expect($result['files'][0])->toMatchArray(['name' => 'form.log', 'data' => 'form log line']);
     expect($result['source'])->toBe('HMCL/3.5.0');
     expect($result['metadata'])->toHaveCount(2);
     expect($result['metadata'][0]->getKey())->toBe('version');
@@ -156,7 +148,10 @@ test('ContentParser decompresses valid brotli payload when extension is availabl
 
     $request = Mockery::mock(\Hyperf\HttpServer\Contract\RequestInterface::class);
     $stream = Mockery::mock(\Psr\Http\Message\StreamInterface::class);
-    $payload = json_encode(['content' => 'hello brotli world', 'source' => 'test']);
+    $payload = json_encode([
+        'files' => [['name' => 'brotli.log', 'content' => 'hello brotli world']],
+        'source' => 'test',
+    ]);
     $compressed = brotli_compress((string) $payload);
     $stream->shouldReceive('getContents')->andReturn($compressed);
     $request->shouldReceive('getBody')->andReturn($stream);
@@ -168,7 +163,7 @@ test('ContentParser decompresses valid brotli payload when extension is availabl
     $result = $parser->getContent();
 
     expect($result)->toBeArray();
-    expect($result['content'])->toBe('hello brotli world');
+    expect($result['files'][0]['data'])->toBe('hello brotli world');
 });
 
 test('parseLauncherSource accepts launcher/version formats', function () {
@@ -204,7 +199,9 @@ test('parseJsonData falls back to User-Agent launcher source when omitted', func
     $parser = new App\ContentParser($request);
     $ref = new ReflectionClass(App\ContentParser::class);
     $method = $ref->getMethod('parseJsonData');
-    $result = $method->invoke($parser, ['content' => 'test log']);
+    $result = $method->invoke($parser, [
+        'files' => [['name' => 'test.log', 'content' => 'test log']],
+    ]);
 
     expect($result)->toBeArray();
     expect($result['source'])->toBe('FCL/1.3.3.2');
@@ -217,7 +214,10 @@ test('parseJsonData does not overwrite explicit source with User-Agent', functio
     $parser = new App\ContentParser($request);
     $ref = new ReflectionClass(App\ContentParser::class);
     $method = $ref->getMethod('parseJsonData');
-    $result = $method->invoke($parser, ['content' => 'test log', 'source' => 'custom-source']);
+    $result = $method->invoke($parser, [
+        'files' => [['name' => 'test.log', 'content' => 'test log']],
+        'source' => 'custom-source',
+    ]);
 
     expect($result)->toBeArray();
     expect($result['source'])->toBe('custom-source');
@@ -230,7 +230,9 @@ test('parseJsonData falls back to 未指定 when both source and User-Agent laun
     $parser = new App\ContentParser($request);
     $ref = new ReflectionClass(App\ContentParser::class);
     $method = $ref->getMethod('parseJsonData');
-    $result = $method->invoke($parser, ['content' => 'test log']);
+    $result = $method->invoke($parser, [
+        'files' => [['name' => 'test.log', 'content' => 'test log']],
+    ]);
 
     expect($result)->toBeArray();
     expect($result['source'])->toBe('未指定');
@@ -243,7 +245,9 @@ test('parseJsonData falls back to 未指定 when User-Agent is empty', function 
     $parser = new App\ContentParser($request);
     $ref = new ReflectionClass(App\ContentParser::class);
     $method = $ref->getMethod('parseJsonData');
-    $result = $method->invoke($parser, ['content' => 'test log']);
+    $result = $method->invoke($parser, [
+        'files' => [['name' => 'test.log', 'content' => 'test log']],
+    ]);
 
     expect($result)->toBeArray();
     expect($result['source'])->toBe('未指定');

@@ -31,53 +31,50 @@ abstract class AbstractController
     }
 
     /**
-     * @param string|array<string, mixed>|null $content
-     * @param array<int, array{name: string, data?: string, size?: int}>|null $files
+     * @return array<string, mixed>|ApiError
      */
-    protected function checkContentSecurity(string|array|null $content, ?array $files = null): void
-    {
-        if (is_string($content)) {
-            \App\System\SecurityService::validateContent($content);
-        } elseif (is_array($content)) {
-            if (isset($content['content']) && is_string($content['content'])) {
-                \App\System\SecurityService::validateContent($content['content']);
-            }
-            if (!empty($content['files']) && is_array($content['files'])) {
-                foreach ($content['files'] as $f) {
-                    if (is_array($f) && isset($f['data']) && is_string($f['data'])) {
-                        \App\System\SecurityService::validateContent($f['data']);
-                    }
-                }
-            }
-        }
-
-        if (!empty($files)) {
-            foreach ($files as $f) {
-                if (isset($f['data'])) {
-                    \App\System\SecurityService::validateContent($f['data']);
-                }
-            }
-        }
-    }
-
-    /**
-     * @return string|ApiError|array<string, mixed>
-     */
-    protected function parseContent(): string|ApiError|array
+    protected function parseContent(): array|ApiError
     {
         return (new ContentParser($this->request))->getContent();
     }
 
     /**
-     * @param array<string, mixed>|string|ApiError $result
-     * @return string|array<string, mixed>
+     * Build the public file list with absolute raw/insights URLs.
+     *
+     * @return array{id: string, fileCount: int, requiresFileSelection: bool, files: array<int, array{name: string, size: int, lines: int, raw: string, insights: string}>}
      */
-    protected function validateContentExists(array|string|ApiError $result): string|array
+    protected function fileListPayload(\App\Log $log): array
     {
-        if ($result instanceof ApiError) {
-            throw $result;
+        $id = $log->getId();
+        $idValue = $id !== null ? $id->get() : '';
+        $files = [];
+
+        foreach ($log->getFiles() as $file) {
+            $name = $file['name'];
+            $files[] = [
+                'name' => $name,
+                'size' => $file['size'],
+                'lines' => $file['lines'],
+                'raw' => $this->fileUrl($idValue, $name, 'raw'),
+                'insights' => $this->fileUrl($idValue, $name, 'insights'),
+            ];
         }
-        return $result;
+
+        return [
+            'id' => $idValue,
+            'fileCount' => count($files),
+            'requiresFileSelection' => count($files) > 1,
+            'files' => $files,
+        ];
+    }
+
+    private function fileUrl(string $id, string $name, string $endpoint): string
+    {
+        $encodedName = implode('/', array_map('rawurlencode', explode('/', $name)));
+        $urls = \App\Config::Get('urls');
+        $apiPrefix = $this->apiPrefix();
+
+        return $urls['apiBaseUrl'] . "/{$apiPrefix}/{$endpoint}/{$id}/{$encodedName}";
     }
 
     protected function apiPrefix(): string
