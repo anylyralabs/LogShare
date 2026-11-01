@@ -1,7 +1,9 @@
 #!/bin/bash
 
+HOST="${HOST:-api.logshare.cn}"
+
 # 确保在 bash 下运行
-ADMIN_TOKEN=$(docker exec logshare-hyperf php -r 'require "core.php"; echo \App\Config::Get("admin.token");')
+ADMIN_TOKEN=$(docker exec logshare-hyperf php -r 'require "core.php"; echo \App\Config::Get("admin")["token"] ?? "";')
 echo "=== ADMIN TOKEN LENGTH: ${#ADMIN_TOKEN} ==="
 
 test_one() {
@@ -11,7 +13,7 @@ test_one() {
     local data="$4"
     local desc="$5"
 
-    local header_args=(-H "Host: api.logshare.cn")
+    local header_args=(-H "Host: ${HOST}")
     if [ -n "$ADMIN_TOKEN" ]; then
         header_args+=(-H "Authorization: Bearer $ADMIN_TOKEN")
     fi

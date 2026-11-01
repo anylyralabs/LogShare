@@ -28,11 +28,10 @@ return [
         'include' => [
             'app/*',
         ],
+        // 只排除无法在 CI 静态跑通的扩展封装；Storage / Data / Cache 是
+        // 历史上缺陷最集中的层，必须计入覆盖率，不能再整体排除。
         'exclude' => [
-            'app/Data/*',
-            'app/Cache/*',
-            'app/Client/*',
-            'app/Storage/*',
+            'app/Client/SpinYarnClient.php',
         ],
     ],
     'architectural' => [

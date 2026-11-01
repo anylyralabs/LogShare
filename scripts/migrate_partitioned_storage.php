@@ -75,6 +75,9 @@ $hasFingerprint = static function (PDO $pdo): bool {
         "SELECT COUNT(*) FROM information_schema.COLUMNS
          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'logs' AND COLUMN_NAME = 'fingerprint'"
     );
+    if ($stmt === false) {
+        return false;
+    }
     return ((int) $stmt->fetchColumn()) > 0;
 };
 

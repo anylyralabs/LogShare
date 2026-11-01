@@ -22,6 +22,12 @@ cp Config.inc.example.php Config.inc.php
 php bin/hyperf.php start
 ```
 
+从 v1.8.4 或更早版本升级时，先执行一次 token 列宽迁移（幂等、只 ALTER，不清数据）：
+
+```bash
+php scripts/widen_token_column.php
+```
+
 `Config.inc.php` 是唯一的应用配置文件（已被 Git 忽略），数据库与 Redis 连接信息可通过 `DB_*`、`REDIS_*` 环境变量覆盖。服务监听 `9501` 端口。
 
 ## 配置
@@ -53,7 +59,7 @@ docker compose -f docker/compose.yaml up -d --build
 
 完整的业务配置（数据库密码、生产域名等）通过挂载项目根目录的 `Config.inc.php` 注入容器，服务器上放置好该文件后执行上面的命令即可。该文件包含密钥，已被 Git 与 Docker 构建上下文排除，只需在服务器上手动放置，不要提交进仓库；`DB_*` 与 `REDIS_*` 的容器网络寻址仍由 compose 环境变量提供。
 
-Compose 定义五个服务：**nginx**（OpenResty 反向代理，对外监听 80/443，承载 OpenLiteWaf 与 TLS 证书）；**hyperf**（应用主进程，仅在内部网络监听 9501）；**mariadb**（数据存储，表结构由 `docker/mariadb-init.sql` 在首次创建卷时初始化）；**mariadb-events**（在数据库可用后创建过期日志清理 Event）；**redis**（缓存与限流）。
+Compose 定义六个服务：**nginx**（OpenResty 反向代理，对外监听 80/443，承载 OpenLiteWaf 与 TLS 证书）；**acme**（证书续期）；**hyperf**（应用主进程，仅在内部网络监听 9501）；**mariadb**（数据存储，表结构由 `docker/mariadb-init.sql` 在首次创建卷时初始化）；**mariadb-events**（在数据库可用后创建过期日志清理 Event）；**redis**（缓存与限流）。
 
 OpenLiteWaf（`OpenLiteWaf/`）是 nginx 容器内的 OpenResty Lua 模块，在反向代理层做按 IP 的固定窗口 CC 限速（超限返回 429，不封 IP）与攻击特征检查（SQL 注入、XSS、路径穿越、命令执行、扫描器探测）；检查范围包括 URL 原始与解码形态、请求路径、User-Agent 和请求体（接收任意用户文本的日志、分析、遥测与管理端点豁免请求体扫描），特征命中返回 403 并按窗口累计次数封禁 IP（默认累计 3 次才封，避免一次误判让该来源十分钟内在所有端点不可用）。统计页 `https://<域名>/security`（JSON 汇总：`/security/stats`，攻击日志分页：`/security/logs`，现存封禁与封禁原因：`/security/bans`）展示内存计数与脱敏后的攻击记录，含命中的规则序号与匹配对象；计数与封禁都会快照到挂载目录，重启后恢复（即“重启不是解封手段”）。误封的运行时解封走特权端点 `POST /security/unban`，令牌为 `.env` 中的 `OPENLITEWAF_ADMIN_TOKEN`，未配置时该端点一律 404。工作方式、配置与规则编写见 `OpenLiteWaf/README.md`；改动 Lua 文件后执行 `docker compose -f docker/compose.yaml restart nginx` 生效（`git pull` 只更新文件，不重载不生效；容器内 `nginx -s reload` 在本部署不可靠）。应用层安全由 Hyperf 负责，参数化查询、输出转义与脱敏过滤链不依赖本模块。
 
@@ -109,12 +115,13 @@ GET    /1/log/{id} | /v1/log/{id}                获取日志元信息与文件�
 GET    /1/insights/{id} | /v1/insights/{id}      获取 Codex 结构化分析结果
 POST   /1/analyse | /v1/analyse                  直接分析日志内容（不存储）
 POST   /v1/telemetry/report                      上报客户端与启动器遥测指标
-GET    /1/limits | /v1/limits                    获取速率限制信息
+GET    /1/limits | /v1/limits                    获取上传限制与存储 TTL
+GET    /1/errors/rate | /v1/errors/rate          限流错误测试端点（始终返回 429）
 GET    /1/filters | /v1/filters                  获取当前启用的过滤器列表
 /*     /v1/admin/*                               管理后台控制台（需 Admin Token）
 ```
 
-上传接口接受 `application/x-www-form-urlencoded` 与 `application/json`，支持 gzip / deflate / brotli 压缩请求体；`files` 数组可附加多个文件，`.zip` 压缩包自动展开并保留内部相对路径，展开后每个文件独立经过脱敏过滤链。客户端接入时建议同时上传「游戏主日志 + 崩溃报告 + 启动器日志」并注明 `source` 来源标识。上传响应中的 `token` 是删除该日志的唯一凭证。Codex 结构化解析结果通过 `/v1/insights/{id}` 返回；AI 智能诊断由外部服务提供，本仓库不再暴露 `/v1/ai/*` 端点。
+上传接口接受 `application/x-www-form-urlencoded` 与 `application/json`，支持 gzip / deflate / brotli 压缩请求体；`files` 数组可附加多个文件，`.zip` 压缩包自动展开并保留内部相对路径，展开后每个文件独立经过脱敏过滤链。客户端接入时建议同时上传「游戏主日志 + 崩溃报告 + 启动器日志」并注明 `source` 来源标识。上传响应中的 `token` 是删除该日志的唯一凭证；命中内容去重时响应会带 `deduplicated: true`，此时返回的 `token` 未写入存储、不能用于删除，请使用首次上传保存的凭证。Codex 结构化解析结果通过 `/v1/insights/{id}` 返回；AI 智能诊断由外部服务提供，本仓库不再暴露 `/v1/ai/*` 端点。
 
 ## 架构
 
@@ -171,7 +178,7 @@ docs/                     历史过程文档与设计规划
 
 ### 限速
 
-公开流量的限速由边缘承担：nginx `limit_req`（30r/s burst=60）与 OpenLiteWaf 的 CC 封禁（10 秒窗口 240 次，超限封禁 IP 600 秒）。仓库中存在 `RateLimitMiddleware`（Redis INCR 按应用层计数，默认 600 次/60 秒，键为 IP + 方法 + 归一化路径，动态资源段折叠共享计数桶），但当前未注册到中间件链，属预留实现；如启用需注意其 Redis 故障路径为返回 503（fail-closed），与注释中的 fail-open 描述不符，见 `app/Middleware/RateLimitMiddleware.php`。
+公开流量的限速由边缘承担：nginx `limit_req`（30r/s burst=60）与 OpenLiteWaf 的 CC 限流（10 秒窗口 240 次，超限返回 429 + `Retry-After`，**不封禁 IP**）。仓库中存在 `RateLimitMiddleware`（Redis INCR 按应用层计数，默认 600 次/60 秒，键为 IP + 方法 + 归一化路径，动态资源段折叠共享计数桶），但当前未注册到中间件链，属预留实现；如启用需注意其 Redis 故障路径为返回 503（fail-closed），与注释中的 fail-open 描述不符，见 `app/Middleware/RateLimitMiddleware.php`。
 
 ## 开发说明
 
@@ -180,10 +187,21 @@ docs/                     历史过程文档与设计规划
 ```bash
 composer test               # Pest 测试套件
 composer test:architecture  # Pest 架构约束测试
-composer stan               # PHPStan 静态分析（level 5）
+composer stan               # PHPStan 静态分析（level 7，覆盖 app/ scripts/ bin/）
 ```
 
-测试覆盖过滤器、存储、上传解析、Codex 分析、EventQueue、Controller 集成与架构约束。存储链路的集成测试需要本地 MariaDB 与 Redis（可用 `docker compose -f docker/compose.yaml up -d` 启动）。OpenLiteWaf 有独立的回归测试，见 `OpenLiteWaf/README.md`。
+测试覆盖过滤器、存储、上传解析、Codex 分析、EventQueue、Controller 集成与架构约束。
+
+- 纯单测无需任何外部服务（Redis 缺失时自动使用内置 `RedisMock`）。
+- 涉及真实 MariaDB / Redis 的用例会自动 `skip`：本地想跑全量请先
+
+  ```bash
+  docker compose --env-file .env -f docker/compose.yaml up -d mariadb redis
+  php scripts/sync_mariadb_events.php
+  ```
+
+  再执行 `composer test`；`-` 与 `skipped` 数量会随本机服务状态变化，属预期。
+- 可观测性口径：上传阶段只做 64KB 头部解析，全文 Codex 分析在首次访问 `/v1/insights/{id}` 时执行。
 
 ### 路由注册
 

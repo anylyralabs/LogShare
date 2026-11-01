@@ -10,8 +10,8 @@ declare(strict_types=1);
  */
 
 $options = getopt('', ['base-url:', 'admin-token::', 'waf-test::']);
-$baseUrl = rtrim((string) ($options['base-url'] ?? 'http://127.0.0.1:9501'), '/');
-$adminToken = (string) ($options['admin-token'] ?? 'test-admin-secret-token');
+$baseUrl = rtrim(is_string($options['base-url'] ?? null) ? $options['base-url'] : 'http://127.0.0.1:9501', '/');
+$adminToken = is_string($options['admin-token'] ?? null) ? $options['admin-token'] : 'test-admin-secret-token';
 $testWaf = isset($options['waf-test']);
 
 echo "=== 开始 LogShare 真实环境端到端测试 ===\n";
@@ -21,6 +21,12 @@ echo "WAF/网关测试模式: " . ($testWaf ? "已启用" : "未启用") . "\n";
 $testsRun = 0;
 $testsPassed = 0;
 
+/**
+ * @param non-empty-string $method
+ * @param non-empty-string $url
+ * @param array<string, string> $headers
+ * @return array{status: int, headers: string, body: string}
+ */
 function httpRequest(string $method, string $url, array $headers = [], ?string $body = null): array
 {
     $ch = curl_init();
@@ -30,7 +36,7 @@ function httpRequest(string $method, string $url, array $headers = [], ?string $
     curl_setopt($ch, CURLOPT_HEADER, true);
     curl_setopt($ch, CURLOPT_TIMEOUT, 15);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
     curl_setopt($ch, CURLOPT_FORBID_REUSE, true);
 
     $formattedHeaders = [];
@@ -46,7 +52,7 @@ function httpRequest(string $method, string $url, array $headers = [], ?string $
     }
 
     $raw = curl_exec($ch);
-    if ($raw === false) {
+    if (!is_string($raw)) {
         $err = curl_error($ch);
         curl_close($ch);
         throw new RuntimeException("cURL 请求失败: {$err} for {$method} {$url}");
@@ -124,7 +130,7 @@ $logId = null;
 $logToken = null;
 
 runCheck('POST /v1/log 创建日志并包含附件文件', function () use ($baseUrl, &$logId, &$logToken) {
-    $payload = json_encode([
+    $payload = (string) json_encode([
         'content' => "[12:00:00] [Server thread/INFO]: Minecraft server starting\n[12:00:01] [Server thread/ERROR]: Exception in thread 'main' java.lang.RuntimeException: Test crash\n",
         'source' => 'e2e-runner/1.0',
         'files' => [
@@ -206,7 +212,7 @@ runCheck('GET /v1/insights/{id} Codex 日志特征解析', function () use ($bas
 });
 
 runCheck('POST /v1/analyse 直发日志分析', function () use ($baseUrl) {
-    $payload = json_encode([
+    $payload = (string) json_encode([
         'content' => "[12:00:00] [main/FATAL]: Failed to start the minecraft server\njava.lang.NullPointerException: Cannot invoke method\n",
     ]);
     $res = httpRequest('POST', "{$baseUrl}/v1/analyse", ['Content-Type' => 'application/json'], $payload);
@@ -220,7 +226,7 @@ runCheck('POST /v1/analyse 直发日志分析', function () use ($baseUrl) {
 });
 
 runCheck('POST /v1/telemetry/report 上报性能遥测数据', function () use ($baseUrl) {
-    $payload = json_encode([
+    $payload = (string) json_encode([
         'items' => [
             [
                 'type' => 'api',
@@ -354,7 +360,7 @@ if ($testWaf) {
     });
 
     runCheck('OpenLiteWaf 白名单豁免验证 (带报错异常的日志 POST 放行)', function () use ($baseUrl) {
-        $payload = json_encode([
+        $payload = (string) json_encode([
             'content' => "[12:00:00] [ERROR]: org.sqlite.SQLiteException: [SQLITE_ERROR] syntax error near 'SELECT * FROM'\n",
         ]);
         $res = httpRequest('POST', "{$baseUrl}/v1/log", ['Content-Type' => 'application/json'], $payload);
@@ -366,7 +372,7 @@ if ($testWaf) {
     runCheck('OpenLiteWaf 遥测上报放行（body 含日志文件名不得判探测）', function () use ($baseUrl) {
         // 回归 2026-09 线上误封：前端遥测 SDK 拦截 fetch/XHR 后把每个请求 URL 原样写进
         // endpoint 上报，探针扩展名规则曾在 body 里命中 main.log 而封掉整个客户端 IP
-        $payload = json_encode([
+        $payload = (string) json_encode([
             'items' => [
                 ['type' => 'api', 'endpoint' => 'https://logshare.cn/v1/raw/qKSA1QU/main.log', 'method' => 'GET', 'duration' => 8.1, 'status' => 200],
                 ['type' => 'error', 'message' => 'cannot read config.yml', 'stack' => 'at read (/data/user/0/cn.logshare/files/latest.log:1)', 'url' => 'https://logshare.cn/log/qKSA1QU'],
@@ -381,7 +387,7 @@ if ($testWaf) {
 
     runCheck('OpenLiteWaf 管理端请求体放行（含反引号与 curl 的正常书写）', function () use ($baseUrl, $adminToken) {
         // 用只读路由发 POST：断言的是边缘层不拦，不关心应用层返回什么（405/404 均可）
-        $payload = json_encode([
+        $payload = (string) json_encode([
             'content' => "# 排障速查\n执行 `whoami` 或 curl https://piston-meta.mojang.com/xxx 下载失败，"
                 . "读 ../../config.yml 报 java.lang.IllegalStateException，检查 /etc/hosts 与 Thread.sleep(Native Method)\n",
         ]);

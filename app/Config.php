@@ -4,6 +4,10 @@ namespace App;
 
 class Config
 {
+    /** admin.token 允许启用的最小长度 */
+    public const MIN_ADMIN_TOKEN_LENGTH = 32;
+
+    /** @var array<string, mixed> */
     private static array $data = [];
     private static bool $loaded = false;
     private static int $dynamicMtime = 0;
@@ -11,6 +15,15 @@ class Config
     private static string $dynamicVersion = '';
     private static string $baseConfigPath = '';
     private static bool $checkingFresh = false;
+    /**
+     * 当前协程（或 CLI 进程）是否已完成过一次新鲜度检查。
+     *
+     * 配置热生效的语义是「下一个请求可见」：同一个请求内调用 Get() 十几次时，
+     * 只有第一次需要 stat 动态配置文件并查询 Redis 版本号，后续复用结果。
+     * 用协程 Context 而不是时间窗口，既能省掉重复检查，又不会让「写完立刻读」
+     * 的调用方（例如管理端保存后立即回读、单测）看到过期数据。
+     */
+    private const FRESH_CONTEXT_KEY = 'logshare_config_fresh_checked';
 
     public static function load(string $path): void
     {
@@ -71,7 +84,7 @@ class Config
      *  - REDIS_TIMEOUT      → cache.redis.timeout
      *  - REDIS_PASSWORD     → cache.redis.password
      *
-     * @param array $data Config array by reference
+     * @param array<string, mixed> $data Config array by reference
      * @return void
      */
     private static function applyEnvironmentOverrides(array &$data): void
@@ -100,6 +113,9 @@ class Config
 
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     private static function validate(array $data): void
     {
         $storage = $data['storage'] ?? [];
@@ -116,8 +132,19 @@ class Config
 
         $admin = $data['admin'] ?? [];
         if (($admin['enabled'] ?? false) === true) {
-            if (empty($admin['token']) || !is_string($admin['token'])) {
+            $token = $admin['token'] ?? null;
+            if (!is_string($token) || $token === '') {
                 throw new \InvalidArgumentException('admin.token is required when admin is enabled');
+            }
+            if (self::isPlaceholderSecret($token)) {
+                throw new \InvalidArgumentException(
+                    'admin.token still uses a placeholder from the example config; set ADMIN_TOKEN to a random value (openssl rand -hex 32)'
+                );
+            }
+            if (strlen($token) < self::MIN_ADMIN_TOKEN_LENGTH) {
+                throw new \InvalidArgumentException(
+                    'admin.token must be at least ' . self::MIN_ADMIN_TOKEN_LENGTH . ' characters long'
+                );
             }
         }
 
@@ -133,6 +160,50 @@ class Config
                         throw new \InvalidArgumentException("Invalid regular expression in security patterns: {$pt}");
                     }
                 }
+            }
+        }
+
+        // 预过滤链是字符串类名，一旦写错（或动态配置被改成不存在的类），
+        // 上传与 /analyse 会在调用处抛 Error 变 500，只能回滚配置才能恢复。
+        $filters = $data['filter']['pre'] ?? [];
+        if (!is_array($filters)) {
+            throw new \InvalidArgumentException('filter.pre must be an array of filter class names');
+        }
+        foreach ($filters as $filterClass) {
+            if (!is_string($filterClass) || $filterClass === '') {
+                throw new \InvalidArgumentException('filter.pre entries must be non-empty class names');
+            }
+            if (!class_exists($filterClass)) {
+                throw new \InvalidArgumentException("filter.pre class does not exist: {$filterClass}");
+            }
+            if (!is_subclass_of($filterClass, \App\Filter\Filter::class)) {
+                throw new \InvalidArgumentException("filter.pre class must extend App\\Filter\\Filter: {$filterClass}");
+            }
+        }
+
+        $storages = $data['storage']['storages'] ?? [];
+        if (is_array($storages)) {
+            foreach ($storages as $storageKey => $storageConfig) {
+                $class = is_array($storageConfig) ? ($storageConfig['class'] ?? null) : null;
+                if (!is_string($class) || $class === '') {
+                    throw new \InvalidArgumentException("storage.storages.{$storageKey}.class is required");
+                }
+                if (!class_exists($class)) {
+                    throw new \InvalidArgumentException("storage.storages.{$storageKey}.class does not exist: {$class}");
+                }
+                if (!is_subclass_of($class, \App\Storage\StorageInterface::class)) {
+                    throw new \InvalidArgumentException("storage.storages.{$storageKey}.class must implement App\\Storage\\StorageInterface: {$class}");
+                }
+            }
+        }
+
+        $cacheClass = $data['cache']['cacheId'] ?? null;
+        if (is_string($cacheClass) && $cacheClass !== '') {
+            if (!class_exists($cacheClass)) {
+                throw new \InvalidArgumentException("cache.cacheId class does not exist: {$cacheClass}");
+            }
+            if (!is_subclass_of($cacheClass, \App\Cache\CacheInterface::class)) {
+                throw new \InvalidArgumentException("cache.cacheId must implement App\\Cache\\CacheInterface: {$cacheClass}");
             }
         }
 
@@ -163,6 +234,11 @@ class Config
             return;
         }
 
+        // 同一请求（协程）内只检查一次；CLI/单测没有协程时退化为每次都检查。
+        if (self::freshCheckedInThisContext()) {
+            return;
+        }
+
         $dynamicPath = self::getDynamicConfigPath();
         clearstatcache(true, $dynamicPath);
         $exists = is_file($dynamicPath);
@@ -171,6 +247,7 @@ class Config
 
         if ($currentMtime !== self::$dynamicMtime || $currentSize !== self::$dynamicSize) {
             self::load($basePath);
+            self::markFreshChecked(true);
             return;
         }
 
@@ -183,6 +260,7 @@ class Config
                     if ($remoteVer !== '' && self::$dynamicVersion !== '' && $remoteVer !== self::$dynamicVersion) {
                         self::load($basePath);
                     }
+                    self::markFreshChecked(true);
                 }
             } catch (\Throwable) {
             } finally {
@@ -191,10 +269,43 @@ class Config
         }
     }
 
+    /**
+     * 读取一个顶层配置段。
+     *
+     * 只接受段名（如 `admin`、`storage`）。传入 `admin.token` 这类点路径
+     * 会静默返回空数组，曾让运维脚本把空值当成有效 token 继续发请求；
+     * 这里直接抛错，把误用暴露在开发阶段。
+     */
+    /**
+     * @return array<string, mixed>
+     */
     public static function Get(string $name): array
     {
+        if (str_contains($name, '.')) {
+            throw new \InvalidArgumentException(
+                "Config::Get() expects a top-level section name, got '{$name}'. Use Config::Get('admin')['token'] instead."
+            );
+        }
+
         self::ensureFresh();
         return self::$data[$name] ?? [];
+    }
+
+    /**
+     * 按 `a.b.c` 形式读取嵌套配置项，缺失时返回 $default。
+     */
+    public static function GetPath(string $path, mixed $default = null): mixed
+    {
+        self::ensureFresh();
+
+        $value = self::$data;
+        foreach (explode('.', $path) as $segment) {
+            if (!is_array($value) || !array_key_exists($segment, $value)) {
+                return $default;
+            }
+            $value = $value[$segment];
+        }
+        return $value;
     }
 
     public static function has(string $name): bool
@@ -203,6 +314,9 @@ class Config
         return isset(self::$data[$name]);
     }
 
+    /**
+     * @return array<string, mixed>
+     */
     public static function all(): array
     {
         self::ensureFresh();
@@ -216,6 +330,25 @@ class Config
             @mkdir($runtimeDir, 0755, true);
         }
         return $runtimeDir . '/dynamic_config.json';
+    }
+
+    /**
+     * 判断是否为示例配置里的占位值（这些值必须被部署方替换）。
+     */
+    public static function isPlaceholderSecret(string $value): bool
+    {
+        $lower = strtolower(trim($value));
+        if ($lower === '') {
+            return false;
+        }
+
+        foreach (['change-this', 'change-me', 'changeme', 'replace-with', 'your-', 'example', 'placeholder', 'xxxx'] as $marker) {
+            if (str_contains($lower, $marker)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public static function maskSecret(?string $secret): string
@@ -253,6 +386,9 @@ class Config
         return $base;
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     private static function applyDynamicOverrides(array &$data): void
     {
         $path = self::getDynamicConfigPath();
@@ -383,8 +519,6 @@ class Config
             }
         }
 
-        self::validate($candidate);
-
         $path = self::getDynamicConfigPath();
         $existing = [];
         if (is_file($path)) {
@@ -431,6 +565,12 @@ class Config
             'updatedAt' => time(),
         ];
 
+        // 校验的必须是「落盘内容合并到基准配置后」的结果：$candidate 基于
+        // 内存快照，与磁盘上的 $newDynamic 在并发写时可能不同，只用前者会
+        // 放过非法合并结果；而 $newDynamic 本身只是增量，直接校验会误判
+        // 缺失的配置段。这里以 baseConfig 为基准重建一次。
+        self::validate(self::applyDynamicToBase($newDynamic));
+
         $dir = dirname($path);
         if (!is_dir($dir)) {
             @mkdir($dir, 0755, true);
@@ -442,6 +582,8 @@ class Config
             @unlink($tmpPath);
             throw new \RuntimeException('Failed to write dynamic config file');
         }
+        // 动态配置含加密后的安全规则与连接凭据掩码，禁止 world-readable
+        @chmod($tmpPath, 0600);
 
         if (!rename($tmpPath, $path)) {
             @unlink($tmpPath);
@@ -449,6 +591,7 @@ class Config
         }
 
         clearstatcache(true, $path);
+        self::markFreshChecked(false);
         self::$dynamicMtime = filemtime($path) ?: time();
         self::$dynamicSize = filesize($path) ?: strlen((string) $encoded);
         self::$dynamicVersion = $version;
@@ -467,6 +610,65 @@ class Config
     }
 
     /**
+     * 当前上下文是否已经检查过新鲜度。
+     */
+    private static function freshCheckedInThisContext(): bool
+    {
+        if (!class_exists(\Hyperf\Context\Context::class)) {
+            return false;
+        }
+        return \Hyperf\Context\Context::get(self::FRESH_CONTEXT_KEY) === true;
+    }
+
+    /**
+     * 标记（或清除）当前上下文的新鲜度检查状态。
+     *
+     * @param bool $checked 为 false 时清除标记，强制下次 Get() 重新检查
+     */
+    private static function markFreshChecked(bool $checked): void
+    {
+        if (!class_exists(\Hyperf\Context\Context::class)) {
+            return;
+        }
+        if ($checked) {
+            \Hyperf\Context\Context::set(self::FRESH_CONTEXT_KEY, true);
+            return;
+        }
+        \Hyperf\Context\Context::destroy(self::FRESH_CONTEXT_KEY);
+    }
+
+    /**
+     * 把动态配置合并到「示例配置 + Config.inc.php」基准之上，得到落盘后
+     * 真正会生效的完整配置（供 saveDynamic() 校验使用）。
+     *
+     * @param array<string, mixed> $dynamic
+     * @return array<string, mixed>
+     */
+    private static function applyDynamicToBase(array $dynamic): array
+    {
+        $base = require CORE_PATH . '/Config.inc.example.php';
+        if (!is_array($base)) {
+            $base = [];
+        }
+
+        $path = self::$baseConfigPath !== '' ? self::$baseConfigPath : (CORE_PATH . '/Config.inc.php');
+        if (is_file($path)) {
+            $userConfig = require $path;
+            if (is_array($userConfig)) {
+                $base = self::deepMerge($base, $userConfig);
+            }
+        }
+
+        $decoded = $dynamic;
+        unset($decoded['_meta']);
+
+        $merged = self::deepMerge($base, $decoded);
+        unset($merged['ai'], $merged['github']);
+
+        return $merged;
+    }
+
+    /**
      * Reset dynamic overrides and reload base configuration.
      */
     public static function resetDynamic(): void
@@ -479,6 +681,7 @@ class Config
         self::$dynamicMtime = 0;
         self::$dynamicSize = -1;
         self::$dynamicVersion = '';
+        self::markFreshChecked(false);
         if (extension_loaded('redis')) {
             self::$checkingFresh = true;
             try {

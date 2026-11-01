@@ -10,14 +10,11 @@ Config.inc.php
 .phpunit.cache
 coverage
 mappings
-rag/index.db
-rag/public
 docker
 tests
 OpenLiteWaf
 OpenLiteStats
 LOCAL_DEV_NOTES.md
-Plan.md
 README.md
 CHANGELOG.md
 CRCLASH.md
@@ -25,3 +22,6 @@ AGENTS.md
 API.md
 postman_collection.json
 openapi.yaml
+testlogs
+.opencode
+.vscode

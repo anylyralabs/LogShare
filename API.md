@@ -105,7 +105,8 @@ POST /v1/log
     "id": "sAbCdEf",
     "url": "https://logshare.cn/sAbCdEf",
     "raw": "https://api.logshare.cn/1/raw/sAbCdEf",
-    "token": "f3a2b1c4d5e6..."
+    "token": "3f9c1a7d5e2b8046c1d9f3a70b5e28461c7a9d0e3f5b8124c6d7e9f0a1b2c3d4",
+    "deduplicated": false
 }
 ```
 
@@ -113,7 +114,7 @@ POST /v1/log
 
 `token` 是删除该日志的唯一凭证，请自行保存。
 
-> **去重命中时的 token 语义**：命中已有指纹时返回的 `token` 是本次请求新生成的，它并未写入存储，因此**不能用于删除该日志**（删除凭证仍属于首次上传者）。若你需要删除能力，请使用首次上传时保存的 token。
+> **去重命中时的 token 语义**：命中已有指纹时响应会带 `deduplicated: true`，返回的 `token` 是本次请求新生成的，并未写入存储，因此**不能用于删除该日志**（删除凭证仍属于首次上传者）。服务端也不会用该 token 覆盖缓存，首次上传者的凭证始终有效。
 
 ---
 
@@ -262,7 +263,7 @@ GET /
 }
 ```
 
-### 速率限制
+### 上传限制
 
 ```
 GET /1/limits   （已弃用，保留兼容）
@@ -279,7 +280,7 @@ GET /v1/limits
 }
 ```
 
-> **限流口径：** 全局限流按 `IP + method + 归一化路径` 计数（动态资源段如 `/v1/raw/{id}` 共享同一桶），默认每 IP 每方法每路径 36,000 次/60 秒，触发返回 HTTP 429。正常集成远达不到该阈值；若你的应用有高并发拉取需求请联系部署方调整。
+> **限流口径：** 限流在边缘完成：nginx `limit_req` 按 IP 30 r/s（burst 60），OpenLiteWaf 再叠加 10 秒窗口 240 次的 CC 限流。CC 超限返回 `429` 并带 `Retry-After`，`limit_req` 超限返回 `503`；两者都不封禁 IP（特征命中累计 3 次才会临时封禁）。应用层 `RateLimitMiddleware` 目前未注册，不参与实际限速。
 
 ### 过滤器列表
 

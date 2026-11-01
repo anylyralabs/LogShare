@@ -4,12 +4,17 @@ declare(strict_types=1);
 
 require 'core.php';
 
-$adminToken = (string) \App\Config::Get('admin.token');
+$adminToken = (string) \App\Config::Get('admin')['token'];
 echo "Admin token configured: " . ($adminToken !== '' ? 'YES (length ' . strlen($adminToken) . ')' : 'NO') . "\n";
 
 $baseUrl = 'https://127.0.0.1';
-$host = 'api.logshare.cn';
+$host = getenv('API_HOST') ?: 'api.logshare.cn';
 
+/**
+ * @param non-empty-string $method
+ * @param array<string|int, string> $headers
+ * @return array{status: int, body: string, error: string}
+ */
 function request(string $method, string $path, array $headers = [], ?string $body = null): array
 {
     global $baseUrl, $host, $adminToken;
@@ -36,13 +41,14 @@ function request(string $method, string $path, array $headers = [], ?string $bod
     }
 
     $response = curl_exec($ch);
+    $response = is_string($response) ? $response : '';
     $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $error = curl_error($ch);
     curl_close($ch);
 
     return [
         'status' => $status,
-        'body' => $response ?: '',
+        'body' => $response,
         'error' => $error,
     ];
 }
@@ -129,7 +135,7 @@ $cfgData = json_decode($cfgRes['body'], true);
 $currentStorageTime = $cfgData['data']['storage']['storageTime'] ?? 604800;
 echo "当前 storage.storageTime: " . json_encode($currentStorageTime) . "\n";
 
-$updatePayload = json_encode([
+$updatePayload = (string) json_encode([
     'storage' => [
         'storageTime' => 604800,
     ],

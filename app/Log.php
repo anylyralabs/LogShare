@@ -12,7 +12,6 @@ use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\VanillaNetworkProtocolErrorRep
 use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\VanillaServerLog;
 use App\Data\MetadataEntry;
 use App\Data\Token;
-use App\Filter\Filter;
 use App\Storage\StorageInterface;
 
 class Log
@@ -21,12 +20,18 @@ class Log
     private ?Id $id = null;
     private ?string $data = null;
     private ?Token $token = null;
+    /** @var MetadataEntry[] */
     private array $metadata = [];
     private ?string $source = null;
     private ?int $created = null;
     private ?int $expires = null;
+    /** @var array<int, array{name: string, data?: string, size?: int}> */
     private array $files = [];
     private ?int $lineCount = null;
+    /** 最近一次 put() 是否命中了已有内容指纹（去重） */
+    private bool $deduplicated = false;
+    /** $log 是否仅由头部片段解析而来（此时不能用于最终结论） */
+    private bool $headerOnly = false;
     protected ?\Aternos\Codex\Log\Log $log = null;
 
     /**
@@ -50,7 +55,7 @@ class Log
     /**
      * Load the log from storage (primary storage with optional Redis cache)
      */
-    private function load()
+    private function load(): void
     {
         $config = Config::Get('storage');
 
@@ -88,12 +93,15 @@ class Log
             $result = $storage::Get($this->id);
 
             if ($result !== null && $this->isCacheEnabled() && !$this->isDeletedTombstoned()) {
+                /** @var array<int, array{name: string, data?: string, size?: int}> $storedFiles */
+                $storedFiles = $result['files'] ?? [];
                 $filesBytes = array_sum(array_map(
-                    fn($file) => isset($file['size']) ? (int) $file['size'] : strlen($file['data'] ?? ''),
-                    $result['files'] ?? []
+                    static fn(array $file): int => isset($file['size']) ? (int) $file['size'] : strlen($file['data'] ?? ''),
+                    $storedFiles
                 ));
                 if ($this->shouldCacheToRedis((string) $result['data'], $filesBytes)) {
                     try {
+                        /** @var array<string, mixed> $result */
                         $this->saveToRedisCache($result);
                     } catch (\Exception $e) {
                         \App\Syslog::error('Redis', '缓存写入失败: ' . $e->getMessage());
@@ -108,14 +116,44 @@ class Log
         }
 
         $this->data = $result['data'];
-        $this->token = isset($result['token']) ? new Token($result['token']) : null;
+        // 存储里永远是哈希（可能是不带前缀的旧格式），用 fromHash() 构造，
+        // 让 matches() 只走哈希比较，绝不把「库里的值」当明文凭证。
+        $this->token = Token::fromHash(isset($result['token']) ? (string) $result['token'] : null);
         $this->metadata = MetadataEntry::allFromArray($result['metadata'] ?? []);
         $this->source = (isset($result['source']) && $result['source'] !== '') ? (string) $result['source'] : '未指定';
         $createdValue = $result['created'] ?? null;
         $this->created = is_numeric($createdValue) ? (int) $createdValue : null;
-        $this->expires = $this->created !== null ? $this->created + $config['storageTime'] : null;
+        $this->expires = $this->created !== null ? $this->created + (int) $config['storageTime'] : null;
         $this->files = $result['files'] ?? [];
         $this->exists = true;
+    }
+
+    /** 上传期解析头部所用的最大字节数（足够覆盖版本行与启动器标识） */
+    private const HEADER_PARSE_BYTES = 65536;
+
+    /**
+     * 只解析日志头部，用于低成本地提取版本 / 加载器元数据。
+     *
+     * 与 analyse() 的区别：只取前 64KB 交给 Codex，实测 3.5MB 日志从 1.9s
+     * 降到 13ms，足以识别 Minecraft 版本与 mod loader（两者都在启动头部）。
+     * 结果只写入 $this->log，不产生 $this->analysis，避免 insights 误用截断结果。
+     */
+    private function analyseHeader(): void
+    {
+        $header = mb_strcut((string) $this->data, 0, self::HEADER_PARSE_BYTES, 'UTF-8');
+        if ($header === '') {
+            return;
+        }
+
+        $detected = (new Detective())->setLogFile(new StringLogFile($header))->detect();
+        if (!$detected instanceof MinecraftLog) {
+            return;
+        }
+
+        $this->log = $detected;
+        $this->log->parse();
+        $this->log->analyse();
+        $this->headerOnly = true;
     }
 
     /**
@@ -129,6 +167,7 @@ class Log
         $this->log = $detected;
         $this->log->parse();
         $this->analysis = $this->log->analyse();
+        $this->headerOnly = false;
         return $this->analysis;
     }
 
@@ -137,8 +176,9 @@ class Log
      *
      * 后台 analytics/versions 的主查询按 log_metadata 的 version / loader 键聚合，
      * 而这两个键历史上只来自客户端自行提交，绝大多数客户端并不提交，导致版本矩阵
-     * 长期只能落到启发式兜底。put() 在落库前已同步执行 analyse()，Codex 的
-     * analyse() 自带结果缓存，故此处取值不触发二次解析。
+     * 长期只能落到启发式兜底。put() 在落库前只解析头部（analyseHeader()），
+     * 版本行与加载器标识都在启动日志头部，足以支撑聚合；全文分析留给
+     * /v1/insights 按需执行，避免上传被 1~2 秒的 CPU 解析拖住。
      *
      * 客户端已显式提交同名键时一律以客户端值为准，不覆盖、不重复写入。
      *
@@ -355,6 +395,14 @@ class Log
     }
 
     /**
+     * 最近一次 put() 是否复用了已有日志（内容指纹命中）。
+     */
+    public function wasDeduplicated(): bool
+    {
+        return $this->deduplicated;
+    }
+
+    /**
      * Get the log id
      *
      * @return Id|null
@@ -371,7 +419,9 @@ class Log
      */
     public function get(): \Aternos\Codex\Log\Log
     {
-        if ($this->log === null) {
+        // 头部片段只用于上传期的元数据提取；对外取完整分析结果时必须
+        // 基于全文重新解析，否则 insights 会返回被截断的结论。
+        if ($this->log === null || $this->headerOnly) {
             $this->analyse();
         }
         return $this->log;
@@ -422,7 +472,7 @@ class Log
      * @param Token|null $token
      * @param MetadataEntry[] $metadata
      * @param string|null $source
-     * @param array|null $files Additional files stored under the same id: [['name' => string, 'data' => string]]
+     * @param array<int, array{name: string, data?: string, size?: int}>|null $files Additional files stored under the same id
      * @return ?Id
      */
     public function put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null, ?array $files = null): ?Id
@@ -430,18 +480,22 @@ class Log
         $this->data = $data;
         $this->lineCount = null;
         $this->preFilter();
-        // 上传日志之后只进行 codex 分析，反混淆由统一队列异步处理
+        // 上传路径只解析「头部指纹」用于生态元数据（版本/加载器），不跑全量
+        // Codex 分析：3.5MB 日志的 detect+parse+analyse 实测约 1.9s，且是纯 CPU
+        // 调用，会阻塞整个 Swoole worker。全量分析在 /v1/insights 首次访问时按需执行。
         try {
-            $this->analyse();
+            $this->analyseHeader();
         } catch (\Throwable $e) {
-            \App\Syslog::error('Log', 'Codex analysis during put failed: ' . $e->getMessage());
+            \App\Syslog::error('Log', 'Codex header analysis during put failed: ' . $e->getMessage());
         }
         $plainToken = $token ?? new Token();
-        // 存储层（MariaDB / 文件系统 / Redis 缓存）只落 SHA-256 哈希；
+        // 存储层（MariaDB / 文件系统 / Redis 缓存）只落带前缀的 SHA-256；
         // 上传响应通过调用方持有的 $token 原对象返回原文。
-        $this->token = new Token(hash('sha256', (string) $plainToken->get()));
+        $this->token = new Token(Token::hashValue((string) $plainToken->get()));
         $this->metadata = $this->deriveEcosystemMetadata($metadata);
-        $this->source = ($source !== null && trim($source) !== '') ? trim($source) : '未指定';
+        $this->source = ($source !== null && trim($source) !== '')
+            ? mb_strcut(trim($source), 0, 64, 'UTF-8')
+            : '未指定';
         $this->files = [];
 
         if (!empty($files)) {
@@ -457,7 +511,7 @@ class Log
                     $filteredContent = $this->preFilterValue($rawContent);
                 }
                 $filteredFiles[] = [
-                    'name' => $file['name'] ?? '',
+                    'name' => $file['name'],
                     'data' => $filteredContent,
                     'size' => strlen($filteredContent),
                 ];
@@ -472,10 +526,14 @@ class Log
          */
         $storage = $config['storages'][$config['storageId']]['class'];
 
-        $this->id = $storage::Put($this->data, $this->token, $this->metadata, $this->source, $this->files);
+        $created = null;
+        $this->id = $storage::Put($this->data, $this->token, $this->metadata, $this->source, $this->files, $created);
         $this->exists = $this->id !== null;
+        $this->deduplicated = $created === false;
 
-        if ($this->id !== null && $this->isCacheEnabled()) {
+        // 去重命中时存储层没有写入本次 token：绝不能拿它覆盖缓存，否则第二个
+        // 上传者会取得该日志的删除凭证（IDOR）。此时也不写缓存，读路径回源即可。
+        if ($this->id !== null && $created !== false && $this->isCacheEnabled()) {
             $filesBytes = array_sum(array_map(fn($file) => strlen($file['data']), $this->files));
             if ($this->shouldCacheToRedis($this->data, $filesBytes)) {
                 try {
@@ -500,7 +558,7 @@ class Log
      * Update log content (and optional files) in storage and redis cache.
      *
      * @param string $newData
-     * @param array|null $newFiles
+     * @param array<int, array{name: string, data?: string, size?: int}>|null $newFiles
      * @return bool
      */
     public function updateContent(string $newData, ?array $newFiles = null): bool
@@ -526,6 +584,7 @@ class Log
         $this->lineCount = null;
         $this->log = null;
         $this->analysis = null;
+        $this->headerOnly = false;
         if ($newFiles !== null) {
             $this->files = $newFiles;
         }
@@ -555,7 +614,7 @@ class Log
     /**
      * Renew the expiry timestamp to expand the ttl
      */
-    public function renew()
+    public function renew(): void
     {
         if (!$this->id) {
             return;
@@ -570,17 +629,9 @@ class Log
 
         $storage::Renew($this->id);
 
-        if (mt_rand(1, 100) === 1) {
-            try {
-                if ($this->id->getStorage() === 'f') {
-                    \App\Storage\FilesystemStorage::CleanupExpired();
-                } else {
-                    \App\Storage\MariaDbStorage::CleanupExpired();
-                }
-            } catch (\Exception $e) {
-                \App\Syslog::error("Storage", "过期日志清理失败: " . $e->getMessage());
-            }
-        }
+        // 读路径绝不做分区维护：CleanupExpired() 会执行 ALTER TABLE ADD/DROP
+        // PARTITION，需要元数据锁，可能阻塞同表上传并长时间占用连接池。
+        // 过期回收由 mariadb-events 定时事件与 Admin 手动端点负责。
 
         if ($this->isCacheEnabled()) {
             try {
@@ -590,13 +641,13 @@ class Log
             }
         }
 
-        $this->expires = time() + $config['storageTime'];
+        $this->expires = time() + (int) $config['storageTime'];
     }
 
     /**
      * Apply pre filters to data string
      */
-    private function preFilter()
+    private function preFilter(): void
     {
         $this->data = $this->preFilterValue((string) $this->data);
     }
@@ -717,7 +768,7 @@ class Log
     /**
      * Get the list of raw files stored under this log id (including content data).
      *
-     * @return array<int, array{name: string, data: string, size?: int}>
+     * @return array<int, array{name: string, data?: string, size?: int}>
      */
     public function getRawFiles(): array
     {
@@ -734,7 +785,7 @@ class Log
     public function getFiles(): array
     {
         return array_map(fn($file) => [
-            'name' => $file['name'] ?? '',
+            'name' => $file['name'],
             'size' => isset($file['size']) ? (int) $file['size'] : strlen($file['data'] ?? ''),
         ], $this->files);
     }
@@ -748,7 +799,7 @@ class Log
     public function getFile(string $name): ?string
     {
         foreach ($this->files as $file) {
-            if (($file['name'] ?? '') === $name) {
+            if ($file['name'] === $name) {
                 return $file['data'] ?? '';
             }
         }
@@ -819,7 +870,41 @@ class Log
         if (!$this->token) {
             return false;
         }
-        return $this->token->matches($token);
+
+        $matched = $this->token->matches($token);
+        if ($matched && !$this->token->hasPrefix()) {
+            // 存量旧记录：验证通过后顺手把存储值升级为带前缀的哈希，
+            // 迁移是惰性的，不需要停机脚本。
+            $this->upgradeStoredToken();
+        }
+
+        return $matched;
+    }
+
+    /**
+     * 把遗留的裸哈希存储值补上 `sha256:` 前缀（仅写存储，失败不影响鉴权）。
+     */
+    private function upgradeStoredToken(): void
+    {
+        if (!$this->id || $this->token === null) {
+            return;
+        }
+
+        $config = Config::Get('storage');
+        $storageId = $this->id->getStorage();
+        if (!isset($config['storages'][$storageId]['class'])) {
+            return;
+        }
+
+        try {
+            /** @var class-string<StorageInterface> $storage */
+            $storage = $config['storages'][$storageId]['class'];
+            if (is_callable([$storage, 'UpgradeToken'])) {
+                $storage::UpgradeToken($this->id, $this->token->normalizedValue());
+            }
+        } catch (\Throwable $e) {
+            \App\Syslog::error('Log', 'token 格式升级失败: ' . $e->getMessage());
+        }
     }
 
     private function getRedisCacheKey(): string
@@ -827,6 +912,9 @@ class Log
         return "log:" . $this->id->getRaw();
     }
 
+    /**
+     * @return array<string, mixed>|null
+     */
     private function loadFromRedis(): ?array
     {
         $cacheKey = $this->getRedisCacheKey();
@@ -888,7 +976,7 @@ class Log
     /**
      * 保存日志到 Redis 缓存
      *
-     * @param array $data
+     * @param array<string, mixed> $data
      * @return void
      * @throws \Exception
      */

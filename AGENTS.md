@@ -20,7 +20,7 @@ php bin/hyperf.php start
 
 composer test                 # Pest 全量
 composer test:architecture    # 架构约束
-composer stan                 # PHPStan level 5
+composer stan                 # PHPStan level 7（app/ scripts/ bin/）
 php vendor/bin/pest tests/Unit/FilterTest.php
 php vendor/bin/pest --filter=TestName
 ```
@@ -29,12 +29,12 @@ php vendor/bin/pest --filter=TestName
 - 集成环境：先由 `.env.example` 准备 `.env`，再 `docker compose --env-file .env -f docker/compose.yaml up -d`。
 - `RedisClient::setTestConnection()` 可让 Redis 相关单测固定走 `RedisMock`；压缩请求用例需要 ext-brotli（CI 已装）。
 - Lua 回归：`php OpenLiteWaf/tests/openlitewaf_regex_test.php`、`lua5.1 OpenLiteWaf/tests/openlitewaf_logic_test.lua`、`lua5.1 OpenLiteStats/tests/openlitestats_logic_test.lua`、`luac5.1 -p OpenLiteWaf/lua/*.lua OpenLiteStats/lua/*.lua`。两套 Lua 测试 stub 了 `ngx`，只能验证流程/计数/作用域，真实 `ngx.re` 与请求体覆盖在 E2E。
-- 仓库没有配置 formatter；改完代码至少跑相关 Pest、架构测试、PHPStan。`phpstan.neon` 里的 `ignoreErrors` 与 `SpinYarnClient` 排除是刻意保留的（Codex 类型层级、CI 无 spinyarn 扩展），不要随手删。
+- 仓库没有配置 formatter；改完代码至少跑相关 Pest、架构测试、PHPStan。`phpstan.neon` 里的 `ignoreErrors` 与 `SpinYarnClient` 排除是刻意保留的（Codex 类型层级、CI 无 spinyarn 扩展），不要随手删；level 7 已覆盖 `app/`、`scripts/`、`bin/`，新增文件必须保持零告警。
 
 ## 请求链路
 
-- 上传：`POST /v1/log` → `RequestParser` 解压 → `UploadParser` 校验 / ZIP 展开 → `Log::put()` 内的 `preFilter` + Codex 轻量分析 + 存储 → `EventQueue::dispatch(EVENT_LOG_UPLOADED)` → 立即 200。耗时安全审核与 SpinYarn 反混淆在 `EventQueueConsumer` 异步执行。
-- 读取：`GET /v1/raw/{id}[/{filename}]` → Redis 缓存 → 存储回源并续期。`DELETE /v1/log/{id}` 校验 Bearer 删除 token（库里只存 SHA-256）。
+- 上传：`POST /v1/log` → `RequestParser` 解压 → `UploadParser` 校验 / ZIP 展开（同名条目自动改名为 `name (2)`）→ `Log::put()` 内的 `preFilter` + **仅头部** Codex 解析（64KB，取版本/加载器）+ 存储 → `EventQueue::dispatch(EVENT_LOG_UPLOADED)` → 立即 200。全文分析留给 `/v1/insights` 按需执行。耗时安全审核与 SpinYarn 反混淆在 `EventQueueConsumer` 异步执行。
+- 读取：`GET /v1/raw/{id}[/{filename}]` → Redis 缓存 → 存储回源并续期。`DELETE /v1/log/{id}` 校验 Bearer 删除 token：库里只存 `sha256:<hex>`，`Token::fromHash()` 永远只比较哈希，**存储值本身不能当凭证**（历史缺陷已修）。读路径不做分区 DDL，过期回收只走事件与 Admin 端点。
 - 管理端：`/{version}/admin/*` 由 `AdminController` 集中承载，鉴权见下。
 
 ## 存储 / ID
@@ -43,6 +43,7 @@ php vendor/bin/pest --filter=TestName
 - 上传限制在落库前强制执行：10 MB / 50,000 行，最多 200 个文件、合计 12 MB；ZIP 必须继续防路径穿越与膨胀炸弹。
 - `logs` / `log_files` / `log_metadata` 按 `created` 做天级 RANGE 分区，必须保留 `p_future` 兜底。分区表不能有外键，级联删除由 `MariaDbStorage` 显式完成（先子表后父表）；所有唯一键都必须包含 `created`；`Renew()` 必须同步子表 `created`，否则父表分区丢弃后会留下永久孤儿行。
 - 过期清理只 `DROP PARTITION`。运行期绝不重建历史分区（会与幸存分区重名，ERROR 1517）；判断历史区间是否已铺过，用「最靠近今天的历史分区」而非分区计数；SQL 里 `PARTITION_DESCRIPTION` 必须 `CAST(... AS SIGNED)`，否则负 cutoff 静默失效；DROP 必须逐个执行（`information_schema` 陈旧视图会拼出已删分区名，ERROR 1064）。
+- `logs.token` 存 `sha256:<hex>`（71 字符），列宽为 `VARCHAR(80)`；旧库升级需执行 `php scripts/widen_token_column.php`（幂等、只 ALTER，不清数据），否则上传会以 1406 失败。
 - 改 `storage.storageTime` 后必须 `php scripts/sync_mariadb_events.php` 并重启 `mariadb-events` 容器。旧库结构不兼容，迁移用 `php scripts/migrate_partitioned_storage.php --yes`：它会 DROP 三表并重建，现有日志全丢，执行前先确认已备份。
 - 上传去重按「正文 + 按名称排序的附件 + source」计算 `xxh128`，命中直接返回旧 ID；旧库缺 `fingerprint` 列时静默降级，不要阻断上传。
 - `GET /v1/admin/system/storage-health` 的 `fragmentationRatio` 在小数据量下天然偏高，看 `dataFreeBytes` 绝对值/趋势与 `largestFreePartition`。
@@ -52,10 +53,14 @@ php vendor/bin/pest --filter=TestName
 - 控制器只用注入的 PSR-7 请求、`ContentParser`、Storage 抽象与 `AbstractController` 助手；禁止读 `$_SERVER` / `$_GET` / `$_POST`，禁止控制器内直接发 SQL（架构测试会挂）。
 - 所有控制器必须继承 `AbstractController`；新增 Filter / Storage / Cache 类必须实现对应接口，架构测试会校验命名空间与继承关系。
 - JSON / 结构化输入一律用 `$this->getParsedBody()`；它兼容 `text/plain` 等非 JSON Content-Type 的裸 JSON。预期业务失败抛 `App\ApiError`，由 `ApiExceptionHandler` 统一渲染。
-- 管理接口由 `admin.enabled` + `AdminAuthMiddleware`（timing-safe token）保护；旧版 `ai` / `github` 配置段会在 `Config::load()` 中丢弃，避免遗留密钥泄露。WAF 概览是 `SecurityService::getWafOverview()` 的白名单投影，新增字段必须同步，否则后台看不到；解封返回 `waf_sync`，不要笼统报“已解封”。
+- 管理接口由 `admin.enabled` + `AdminAuthMiddleware`（timing-safe token）保护；管理端 CORS 只回显 `urls.corsOrigins` 白名单（公开端仍是 `*`），新增管理前端时先配白名单。示例配置的 `admin.token` 为空、`ADMIN_ENABLED` 默认 `false`；`Config::validate()` 拒绝占位串与短于 32 字符的 token，新增部署不会继承仓库里的口令。旧版 `ai` / `github` 配置段在 `Config::load()` 中丢弃，避免遗留密钥泄露。WAF 概览是 `SecurityService::getWafOverview()` 的白名单投影，新增字段必须同步，否则后台看不到；解封返回 `waf_sync`，不要笼统报“已解封”。
 - Admin 配置读取会对密钥打码；PUT 走 `Config::saveDynamic()`，它用 `restoreMaskedSecrets()` 回填 `******`，不要绕过它直接写动态配置。
 - 违规关键词 / 正则使用 AES-256-GCM 密文落盘（`enc:v1:...`），密钥来自 `SECURITY_ENCRYPTION_KEY` 或 `runtime/.security_secret`（0600）；不要改成明文存储，也不要吞掉解密失败异常。
-- 客户端真实 IP 只信 `security.trustedProxies` / `rateLimit.trustedProxies`；`X-Forwarded-For` 从右往左剥离受信代理。`RateLimitMiddleware` 目前未注册（中间件链上只有 `CorsMiddleware`），且 Redis 故障路径为 503 fail-closed，启用前先确认。
+- `POST /v1/admin/system/cache/flush` 只接受 `StorageHealthService::FLUSHABLE_PREFIXES` 白名单，非法前缀返回 400；不要再加 `all`/`*` 的 `FLUSHDB` 快捷路径。
+- 公开遥测 `POST /v1/telemetry/report` 无鉴权：端点路径截断到 200 字符，单日端点键上限 2000（溢出归并 `:other`），`recordBatch()` 在 Redis 不可用时返回 0 而不是谎报已处理。
+- 内容去重命中时 `Log::put()` **不得**写缓存（`StorageInterface::Put()` 通过 `&$created` 告知是否新建），否则第二个上传者会拿到删除凭证；响应带 `deduplicated: true`。
+- `Config::Get()` 只接受顶层段名，点路径会抛异常（用 `Config::GetPath('a.b')`）；新鲜度检查按协程 Context 每请求一次，不要改回时间窗口。
+- 客户端真实 IP 只信 `security.trustedProxies` / `rateLimit.trustedProxies`（IPv4 与 IPv6 CIDR 都支持）；`X-Forwarded-For` 从右往左剥离受信代理。`RateLimitMiddleware` 目前未注册（中间件链上只有 `CorsMiddleware`），且 Redis 故障路径为 503 fail-closed，启用前先确认。
 - 改路由或响应必须同步 `API.md`、`openapi.yaml`、`postman_collection.json`。
 
 ## 事件队列
@@ -78,7 +83,7 @@ php vendor/bin/pest --filter=TestName
 - Swoole 是常驻进程：进程级缓存、扩展句柄、注解代理类都跨请求存活。改解析 / 反混淆 / 进程状态后必须重启，不能只改文件。
 - 常驻进程外呼 cURL 一律 `CURLOPT_FORBID_REUSE => true`，并在 `finally` 中 `curl_close` / `$ch = null`，否则 FD 累积到 EMFILE；不要用 Swoole 协程 hook 不支持的选项（如 `CURLOPT_MAXFILESIZE`），在应用层限制载荷。
 - `RedisClient` 显式设置 `OPT_READ_TIMEOUT`（默认 10s，高于消费者 2s/5s 阻塞等待），不要调低，否则会周期性断连。
-- 诊断日志用 `App\Syslog::error()`，不要直接 `error_log()`。
+- 诊断日志用 `App\Syslog::error()`，不要直接 `error_log()`；`runtime/logs/audit.log` 有 5MB 轮转与尾部读取，不要再整文件 `file()`。
 - 请求体解压统一走 `App\Parser\RequestParser`（20 MB 上限）；brotli 用单参 `brotli_uncompress($body)`，第二参是字典，传整数会 TypeError。
 - 响应压缩由 Swoole `http_compression`（level 6、min 1024）优先 Brotli；nginx 只做 gzip 兜底并透传 `Accept-Encoding`。
 - 配置统一走 `App\Config::Get()`；Admin 的动态修改落 `runtime/dynamic_config.json` 并跨 worker 热生效，不要在进程启动时缓存一份配置副本。

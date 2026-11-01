@@ -26,7 +26,8 @@ class LogMetaController extends AbstractController
             'lines' => $log->getLineNumbers(),
             'created' => $log->getCreated(),
             'expires' => $log->getExpires(),
-            'metadata' => array_map(fn($entry) => $entry->jsonSerialize(), $log->getMetadata()),
+            // visible=false 是客户端显式声明的「不要公开」，公开元信息接口必须尊重它
+            'metadata' => \App\Data\MetadataEntry::serializeVisible($log->getMetadata()),
             'source' => $log->getSource(),
             'files' => $log->getFiles(),
             'raw' => $this->rawUrl($logId),

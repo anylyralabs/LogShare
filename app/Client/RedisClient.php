@@ -57,7 +57,11 @@ class RedisClient
     protected static function connection(): object
     {
         if (self::$testConnection !== null) {
-            return self::$testConnection;
+            // 测试注入的连接是 \Redis 的鸭子类型替身（RedisMock / Mockery），
+            // 运行时只能声明 object，静态分析按 \Redis 处理以便调用方获得补全。
+            /** @var \Redis $testConnection */
+            $testConnection = self::$testConnection;
+            return $testConnection;
         }
 
         $config = \App\Config::Get('cache');
@@ -95,7 +99,7 @@ class RedisClient
     }
 
     /**
-     * @param array $redisConfig cache.redis 配置节（host/port/timeout/password/database）
+     * @param array<string, mixed> $redisConfig cache.redis 配置节（host/port/timeout/password/database）
      */
     private static function createConnection(array $redisConfig): \Redis
     {

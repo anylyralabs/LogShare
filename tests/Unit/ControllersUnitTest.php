@@ -261,6 +261,9 @@ test('LogController creates log and enforces token on delete', function () {
 });
 
 test('TelemetryController accepts batch and single reports', function () {
+    // 遥测聚合依赖 Redis；注入 mock 让用例不依赖本机是否启动 redis-server
+    \App\Client\RedisClient::setTestConnection(new \Tests\Mocks\RedisMock());
+
     $mockReq = Mockery::mock(RequestInterface::class);
     $mockReq->shouldReceive('getParsedBody')->andReturn([
         'items' => [
@@ -281,6 +284,8 @@ test('TelemetryController accepts batch and single reports', function () {
     $body = json_decode((string) $resp->getBody(), true);
     expect($body['success'])->toBeTrue();
     expect($body['processed'])->toBe(1);
+
+    \App\Client\RedisClient::setTestConnection(null);
 });
 
 test('AnalyseController parses content and returns analysis json', function () {

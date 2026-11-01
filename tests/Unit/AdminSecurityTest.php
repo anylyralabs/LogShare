@@ -19,7 +19,7 @@ beforeEach(function () {
     $cfg = $this->origData;
     $cfg['admin'] = [
         'enabled' => true,
-        'token' => 'test-admin-secret-token',
+        'token' => 'test-admin-secret-token-0123456789abcdef',
     ];
     $cfg['filesystem']['path'] = substr($this->tmpDir, strlen(CORE_PATH)) . '/';
     $cfg['storage']['storageId'] = 'f';
@@ -56,6 +56,18 @@ afterEach(function () {
     if (is_file($rulesFile)) {
         @unlink($rulesFile);
     }
+    $bansFile = CORE_PATH . '/runtime/security_bans.json';
+    if (is_file($bansFile)) {
+        @unlink($bansFile);
+    }
+    // saveContentRules() 会双写动态配置，必须一并清理，避免污染后续本地运行
+    $dynamicPath = Config::getDynamicConfigPath();
+    if (is_file($dynamicPath)) {
+        @unlink($dynamicPath);
+    }
+    $this->configRef->getProperty('dynamicMtime')->setValue(null, 0);
+    $this->configRef->getProperty('dynamicSize')->setValue(null, -1);
+    $this->configRef->getProperty('dynamicVersion')->setValue(null, '');
     $this->dataProp->setValue(null, $this->origData);
 });
 

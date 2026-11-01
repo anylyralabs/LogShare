@@ -20,6 +20,9 @@ class RequestParser extends HyperfParser
     /** 单次请求体最大允许解压字节数（20MB，与 ContentParser 限制对齐），防御 Gzip 炸弹 OOM */
     protected const int MAX_DECOMPRESSED_BYTES = 20 * 1024 * 1024;
 
+    /**
+     * @return array<string, mixed>
+     */
     public function parse(string $rawBody, string $contentType): array
     {
         $contentType = strtolower($contentType);

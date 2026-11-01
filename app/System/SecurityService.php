@@ -124,15 +124,45 @@ final class SecurityService
         [$subnet, $bits] = explode('/', $cidr, 2);
         $bits = (int) $bits;
 
-        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) && filter_var($subnet, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+        $isV4 = filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false
+            && filter_var($subnet, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false;
+        if ($isV4) {
             $ipLong = ip2long($ip);
             $subnetLong = ip2long($subnet);
             if ($ipLong === false || $subnetLong === false || $bits < 0 || $bits > 32) {
                 return false;
             }
+            if ($bits === 0) {
+                return true;
+            }
             $mask = -1 << (32 - $bits);
             $subnetLong &= $mask;
             return ($ipLong & $mask) === $subnetLong;
+        }
+
+        // IPv6 也必须支持：反向代理常用 IPv6 内网段，判不出来会让
+        // resolveClientIp() 退化成代理地址，按代理 IP 聚合封禁与限流。
+        $isV6 = filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false
+            && filter_var($subnet, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false;
+        if ($isV6) {
+            if ($bits < 0 || $bits > 128) {
+                return false;
+            }
+            $ipBin = inet_pton($ip);
+            $subnetBin = inet_pton($subnet);
+            if ($ipBin === false || $subnetBin === false) {
+                return false;
+            }
+            $fullBytes = intdiv($bits, 8);
+            $remainingBits = $bits % 8;
+            if ($fullBytes > 0 && substr($ipBin, 0, $fullBytes) !== substr($subnetBin, 0, $fullBytes)) {
+                return false;
+            }
+            if ($remainingBits === 0) {
+                return true;
+            }
+            $mask = (0xFF << (8 - $remainingBits)) & 0xFF;
+            return (ord($ipBin[$fullBytes]) & $mask) === (ord($subnetBin[$fullBytes]) & $mask);
         }
 
         return false;
@@ -141,7 +171,7 @@ final class SecurityService
     /**
      * 查询当前被封禁的 IP 列表。
      *
-     * @return array<int, array{ip: string, reason: string, bannedAt: int, expiresAt: int, operator: string, source: string}>
+     * @return array<int, array<string, mixed>>
      */
     public static function getBannedIps(): array
     {
@@ -152,22 +182,32 @@ final class SecurityService
         // 1. 从 Redis 检索主动封禁记录
         if ($redis !== null) {
             try {
-                $keys = $redis->keys(self::BAN_PREFIX . '*');
-                if (is_array($keys)) {
-                    foreach ($keys as $k) {
-                        $val = $redis->get($k);
-                        if (is_string($val) && $val !== '') {
-                            $decoded = json_decode($val, true);
-                            if (is_array($decoded) && isset($decoded['ip'])) {
-                                $bans[$decoded['ip']] = [
-                                    'ip' => (string) $decoded['ip'],
-                                    'reason' => (string) ($decoded['reason'] ?? '管理员主动封禁'),
-                                    'bannedAt' => (int) ($decoded['bannedAt'] ?? $now),
-                                    'expiresAt' => (int) ($decoded['expiresAt'] ?? ($now + 86400)),
-                                    'operator' => (string) ($decoded['operator'] ?? 'admin'),
-                                    'source' => 'manual',
-                                ];
-                            }
+                // KEYS 会阻塞整个 Redis 实例（单线程），管理端封禁列表又是
+                // 高频轮询接口；改用 SCAN 游标分批遍历。
+                $keys = [];
+                $iterator = null;
+                do {
+                    $batch = $redis->scan($iterator, self::BAN_PREFIX . '*', 200);
+                    if (is_array($batch)) {
+                        foreach ($batch as $found) {
+                            $keys[] = $found;
+                        }
+                    }
+                } while ($iterator !== 0 && $iterator !== null && count($keys) < 10000);
+
+                foreach ($keys as $k) {
+                    $val = $redis->get($k);
+                    if (is_string($val) && $val !== '') {
+                        $decoded = json_decode($val, true);
+                        if (is_array($decoded) && isset($decoded['ip'])) {
+                            $bans[$decoded['ip']] = [
+                                'ip' => (string) $decoded['ip'],
+                                'reason' => (string) ($decoded['reason'] ?? '管理员主动封禁'),
+                                'bannedAt' => (int) ($decoded['bannedAt'] ?? $now),
+                                'expiresAt' => (int) ($decoded['expiresAt'] ?? ($now + 86400)),
+                                'operator' => (string) ($decoded['operator'] ?? 'admin'),
+                                'source' => 'manual',
+                            ];
                         }
                     }
                 }
@@ -248,10 +288,6 @@ final class SecurityService
         ];
     }
 
-    /**
-     * 解封指定 IP。
-     *
-     * @param string $ip
     /**
      * 解封指定 IP（应用层 Redis / 本地文件封禁）。
      *
@@ -339,6 +375,9 @@ final class SecurityService
         return false;
     }
 
+    /**
+     * @return array<string, array<string, mixed>>
+     */
     private static function readFileBans(): array
     {
         $path = CORE_PATH . self::BANS_FILE;
@@ -353,16 +392,14 @@ final class SecurityService
         return is_array($data) ? $data : [];
     }
 
+    /**
+     * @param array<string, mixed> $record
+     */
     private static function writeFileBan(string $ip, array $record): void
     {
         $bans = self::readFileBans();
         $bans[$ip] = $record;
-        $path = CORE_PATH . self::BANS_FILE;
-        $dir = dirname($path);
-        if (!is_dir($dir)) {
-            @mkdir($dir, 0777, true);
-        }
-        @file_put_contents($path, json_encode($bans, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        self::writeJsonFile(CORE_PATH . self::BANS_FILE, $bans);
     }
 
     private static function removeFileBan(string $ip): void
@@ -370,9 +407,51 @@ final class SecurityService
         $bans = self::readFileBans();
         if (isset($bans[$ip])) {
             unset($bans[$ip]);
-            $path = CORE_PATH . self::BANS_FILE;
-            @file_put_contents($path, json_encode($bans, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+            self::writeJsonFile(CORE_PATH . self::BANS_FILE, $bans);
         }
+    }
+
+    /**
+     * 原子写入本地 JSON（临时文件 + rename），并把权限收紧到 0600。
+     *
+     * @param array<string, mixed> $data
+     */
+    private static function writeJsonFile(string $path, array $data): void
+    {
+        $dir = dirname($path);
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0750, true);
+        }
+
+        $encoded = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($encoded === false) {
+            \App\Syslog::error('SecurityService', 'Failed to encode ban file: ' . $path);
+            return;
+        }
+
+        $tmp = $path . '.tmp.' . bin2hex(random_bytes(4));
+        if (@file_put_contents($tmp, $encoded, LOCK_EX) === false) {
+            @unlink($tmp);
+            \App\Syslog::error('SecurityService', 'Failed to write ban file: ' . $path);
+            return;
+        }
+
+        @chmod($tmp, 0600);
+        if (!@rename($tmp, $path)) {
+            @unlink($tmp);
+            \App\Syslog::error('SecurityService', 'Failed to replace ban file: ' . $path);
+        }
+    }
+
+    /**
+     * OpenLiteWaf 运行在 nginx 容器内，证书按公网域名签发；内部直连时必须带
+     * 与证书匹配的 Host。这里从 urls.apiBaseUrl 推导，测试部署无需改代码。
+     */
+    private static function wafHost(): string
+    {
+        $base = (string) \App\Config::GetPath('urls.apiBaseUrl', '');
+        $host = parse_url($base, PHP_URL_HOST);
+        return is_string($host) && $host !== '' ? $host : 'api.logshare.cn';
     }
 
     /**
@@ -541,7 +620,10 @@ final class SecurityService
         $tag = '';
         $cipher = openssl_encrypt($plaintext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
         if ($cipher === false || strlen($tag) !== 16) {
-            return $plaintext;
+            // 绝不静默落明文：调用方会把返回值直接写盘，退回明文等于
+            // 在磁盘上暴露违规关键词，与加密存储的承诺相反。
+            \App\Syslog::error('SecurityService', 'Failed to encrypt secret: openssl_encrypt returned false or short tag');
+            throw new \RuntimeException('Failed to encrypt secret; refusing to persist plaintext');
         }
 
         return self::CIPHER_PREFIX . base64_encode($iv . $tag . $cipher);
@@ -729,14 +811,8 @@ final class SecurityService
             'updatedAt' => time(),
         ];
 
-        // 1. 持久化密文到 runtime/content_reject_rules.json
-        $path = CORE_PATH . self::RULES_FILE;
-        $dir = dirname($path);
-        if (!is_dir($dir)) {
-            @mkdir($dir, 0777, true);
-        }
-
-        file_put_contents($path, json_encode($diskData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        // 1. 持久化密文到 runtime/content_reject_rules.json（原子写 + 0600）
+        self::writeJsonFile(CORE_PATH . self::RULES_FILE, $diskData);
 
         // 2. 双写密文同步到 Config 动态配置，确保跨进程多 Worker 立即生效且重启不丢失
         try {
@@ -790,6 +866,9 @@ final class SecurityService
         }
     }
 
+    /**
+     * @return array<int, array<string, mixed>>
+     */
     private static function readWafSnapshotBans(): array
     {
         $data = self::loadWafData();
@@ -869,7 +948,7 @@ final class SecurityService
                 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
                 curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
                 curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
-                curl_setopt($ch, CURLOPT_HTTPHEADER, ['Host: api.logshare.cn']);
+                curl_setopt($ch, CURLOPT_HTTPHEADER, ['Host: ' . self::wafHost()]);
                 curl_setopt($ch, CURLOPT_TIMEOUT, 2);
                 curl_setopt($ch, CURLOPT_FORBID_REUSE, true);
                 $res = curl_exec($ch);
@@ -970,7 +1049,7 @@ final class SecurityService
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
             curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
             curl_setopt($ch, CURLOPT_HTTPHEADER, [
-                'Host: api.logshare.cn',
+                'Host: ' . self::wafHost(),
                 'X-OpenLiteWaf-Token: ' . $token,
             ]);
             curl_setopt($ch, CURLOPT_FORBID_REUSE, true);

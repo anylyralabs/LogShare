@@ -1,3 +1,4 @@
+import os
 import ssl
 import json
 import urllib.request
@@ -14,7 +15,7 @@ ctx.check_hostname = False
 ctx.verify_mode = ssl.CERT_NONE
 
 BASE_URL = "https://127.0.0.1"
-HOST = "api.logshare.cn"
+HOST = os.environ.get("API_HOST", "api.logshare.cn")
 
 def request(method, path, headers=None, body=None):
     if headers is None:

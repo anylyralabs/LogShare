@@ -27,6 +27,7 @@ test('Token accepts a fixed value', function () {
     $token = new Token('abc123');
     expect($token->get())->toBe('abc123');
     expect($token->matches('abc123'))->toBeTrue();
+    expect($token->isHashed())->toBeFalse();
 });
 
 test('MetadataEntry parses from array', function () {
@@ -62,9 +63,14 @@ test('MetadataEntry parses from object', function () {
 });
 
 test('MetadataEntry allFromArray caps at max entries', function () {
-    $data = array_fill(0, 200, ['key' => 'k', 'value' => 'v']);
+    $data = [];
+    for ($i = 0; $i < 200; $i++) {
+        $data[] = ['key' => 'k' . $i, 'value' => 'v'];
+    }
     $entries = MetadataEntry::allFromArray($data);
 
+    // 同 key 会被去重（log_metadata 主键为 (log_id, key, created)），
+    // 所以这里用 200 个不同 key 验证条数上限。
     expect(count($entries))->toBe(MetadataEntry::MAX_ENTRIES);
 });
 
@@ -100,4 +106,46 @@ test('MetadataEntry jsonSerialize matches expected shape', function () {
 test('MetadataEntry getDisplayLabel falls back to key', function () {
     $entry = MetadataEntry::fromArray(['key' => 'fallback', 'value' => 'v']);
     expect($entry->getDisplayLabel())->toBe('fallback');
+});
+test('Token never accepts the stored hash as a credential', function () {
+    $plain = 'a1b2c3d4e5f6';
+    $stored = App\Data\Token::hashValue($plain);
+    $holder = Token::fromHash($stored);
+
+    // 原文可以通过
+    expect($holder->matches($plain))->toBeTrue();
+    // 存储值本身绝不可以通过（历史缺陷：明文回退分支让哈希变成凭证）
+    expect($holder->matches($stored))->toBeFalse();
+    expect($holder->matches(substr($stored, strlen(Token::HASH_PREFIX))))->toBeFalse();
+});
+
+test('Token upgrades legacy unprefixed hashes by prefixing', function () {
+    $plain = 'legacy-token-value';
+    $legacy = hash('sha256', $plain);
+    $token = Token::fromHash($legacy);
+
+    expect($token)->not->toBeNull();
+    expect($token->isHashed())->toBeTrue();
+    expect($token->hasPrefix())->toBeFalse();
+    expect($token->matches($plain))->toBeTrue();
+    expect($token->matches($legacy))->toBeFalse();
+    expect($token->normalizedValue())->toBe(Token::HASH_PREFIX . $legacy);
+});
+
+test('Token hash value is prefixed and stable', function () {
+    expect(Token::hashValue('x'))->toStartWith(Token::HASH_PREFIX);
+    expect(Token::hashValue('x'))->toBe(Token::hashValue('x'));
+    expect(Token::hashValue('x'))->not->toBe(Token::hashValue('y'));
+});
+
+test('MetadataEntry allFromArray keeps the first entry for duplicate keys', function () {
+    $entries = MetadataEntry::allFromArray([
+        ['key' => 'version', 'value' => '1.20.1'],
+        ['key' => 'version', 'value' => '1.21.1'],
+        ['key' => 'loader', 'value' => 'fabric'],
+    ]);
+
+    expect($entries)->toHaveCount(2);
+    expect($entries[0]->getValue())->toBe('1.20.1');
+    expect($entries[1]->getKey())->toBe('loader');
 });

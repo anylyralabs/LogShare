@@ -131,17 +131,23 @@ class ApiTest extends HttpTestCase
             $this->markTestSkipped('MariaDB is not available: ' . $e->getMessage());
         }
 
-        $content = "[00:00:01] [Server thread/INFO]: token storage check\n";
+        // 内容必须唯一：否则会命中去重指纹、复用上一轮遗留的 ID 与旧 token
+        $content = "[00:00:01] [Server thread/INFO]: token storage check " . uniqid('', true) . "\n";
         $create = $this->post('/v1/log', ['content' => $content]);
 
         $id = (string) $create->json('id');
         $token = (string) $create->json('token');
 
-        // 存储中落库的是 SHA-256 哈希，而非原文 token
+        // 存储中落库的是带前缀的 SHA-256，而非原文 token
         $row = Db::table('logs')->where('id', substr($id, 1))->first();
         $this->assertNotNull($row);
         $this->assertNotSame($token, $row->token);
-        $this->assertSame(hash('sha256', $token), $row->token);
+        $this->assertSame(\App\Data\Token::hashValue($token), $row->token);
+        $this->assertStringStartsWith(\App\Data\Token::HASH_PREFIX, (string) $row->token);
+
+        // 库里的值本身不能作为删除凭证
+        $leakAttempt = $this->delete("/v1/log/{$id}", [], ['Authorization' => 'Bearer ' . $row->token]);
+        $this->assertSame(400, $leakAttempt->getStatusCode());
 
         // 原文 token 仍可正常通过删除鉴权（哈希比对路径）
         $delete = $this->delete("/v1/log/{$id}", [], ['Authorization' => 'Bearer ' . $token]);
@@ -153,6 +159,10 @@ class ApiTest extends HttpTestCase
 
     public function testTelemetryReportEndpointAcceptsMetrics(): void
     {
+        // 遥测聚合写入 Redis；本机未启动 redis-server 时注入 mock，
+        // 避免同一个用例在不同开发机上一红一绿。
+        \App\Client\RedisClient::setTestConnection(new \Tests\Mocks\RedisMock());
+
         $payload = [
             'items' => [
                 [
@@ -177,6 +187,8 @@ class ApiTest extends HttpTestCase
         $response->assertSuccessful();
         $response->assertJsonFragment(['success' => true]);
         $this->assertSame(2, $response->json('processed'));
+
+        \App\Client\RedisClient::setTestConnection(null);
     }
 }
 

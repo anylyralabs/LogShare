@@ -15,7 +15,7 @@ class MetadataEntry implements \JsonSerializable
     protected bool $visible = true;
 
     /**
-     * @param iterable|null $dataArray
+     * @param iterable<mixed>|null $dataArray
      * @return MetadataEntry[]
      */
     public static function allFromArray(?iterable $dataArray): array
@@ -24,6 +24,7 @@ class MetadataEntry implements \JsonSerializable
             return [];
         }
         $entries = [];
+        $seen = [];
         foreach ($dataArray as $data) {
             if (is_array($data)) {
                 $entry = static::fromArray($data);
@@ -32,9 +33,21 @@ class MetadataEntry implements \JsonSerializable
             } else {
                 continue;
             }
-            if ($entry !== null) {
-                $entries[] = $entry;
+            if ($entry === null) {
+                continue;
             }
+
+            // `log_metadata` 主键为 (log_id, key, created)：重复 key 会直接
+            // 触发 Duplicate entry 并把上传打成 500。以首次出现为准，后者丢弃。
+            $key = $entry->getKey();
+            if ($key !== null && isset($seen[$key])) {
+                continue;
+            }
+            if ($key !== null) {
+                $seen[$key] = true;
+            }
+
+            $entries[] = $entry;
             if (count($entries) >= static::MAX_ENTRIES) {
                 break;
             }
@@ -43,7 +56,7 @@ class MetadataEntry implements \JsonSerializable
     }
 
     /**
-     * @param array $data
+     * @param array<string, mixed> $data
      * @return MetadataEntry|null
      */
     public static function fromArray(array $data): ?MetadataEntry
@@ -65,6 +78,9 @@ class MetadataEntry implements \JsonSerializable
         return static::fromArray($arrayData);
     }
 
+    /**
+     * @return array{key: string|null, value: mixed, label: string|null, visible: bool}
+     */
     public function jsonSerialize(): array
     {
         return [
@@ -164,6 +180,23 @@ class MetadataEntry implements \JsonSerializable
         return $this->visible;
     }
 
+    /**
+     * 公开接口可序列化的条目（过滤掉 visible=false 的隐私字段）。
+     *
+     * @param iterable<MetadataEntry> $entries
+     * @return array<int, array<string, mixed>>
+     */
+    public static function serializeVisible(iterable $entries): array
+    {
+        $out = [];
+        foreach ($entries as $entry) {
+            if ($entry->isVisible()) {
+                $out[] = $entry->jsonSerialize();
+            }
+        }
+        return $out;
+    }
+
     public function setVisible(bool $visible): static
     {
         $this->visible = $visible;
@@ -176,7 +209,7 @@ class MetadataEntry implements \JsonSerializable
     }
 
     /**
-     * @param array $data
+     * @param array<string, mixed> $data
      * @return $this
      */
     public function setFromArray(array $data): static

@@ -11,8 +11,13 @@ info:
     
     ## Rate Limiting
     
-    All endpoints are rate limited per IP (default: 36,000 requests/minute).
-    Exceeding returns `429 Too Many Requests` with `Retry-After` header.
+    Rate limiting is enforced at the edge: nginx `limit_req` (30 r/s, burst 60)
+    plus OpenLiteWaf CC defense (240 requests / 10 s window). Exceeding the
+    edge limits returns `429 Too Many Requests` (CC) or `503` (limit_req);
+    the CC response carries a `Retry-After` header.
+
+    The application-level `RateLimitMiddleware` exists but is NOT registered,
+    so it does not currently contribute any limit.
     
     ## Content Filtering
     
@@ -81,6 +86,11 @@ paths:
         - `source` (string, optional): Free-form source identifier
         
         Returns a log ID and a deletion token. **Save the token** — it cannot be recovered.
+
+        De-duplication: when an identical upload (same body + same attached files + same `source`)
+        already exists, the response reuses the existing `id`, but the returned `token` is a fresh
+        value that was **not** stored and therefore cannot delete that log. Use the token from the
+        original upload. The response also carries `deduplicated: true` in this case.
         
         (Deprecated; use /v1/log instead)
       operationId: createLog
@@ -129,10 +139,11 @@ paths:
               example:
                 success: true
                 message: "Log submitted successfully"
-                id: "aB3x9K"
-                url: "https://logshare.cn/aB3x9K"
-                raw: "https://api.logshare.cn/1/raw/aB3x9K"
-                token: "k7m2N9pQ4vL1xY6z"
+                id: "sAbCdEf"
+                url: "https://logshare.cn/sAbCdEf"
+                raw: "https://api.logshare.cn/1/raw/sAbCdEf"
+                token: "3f9c1a7d5e2b8046c1d9f3a70b5e28461c7a9d0e3f5b8124c6d7e9f0a1b2c3d4"
+                deduplicated: false
         '400':
           $ref: '#/components/responses/BadRequest'
         '413':
@@ -157,7 +168,7 @@ paths:
             type: string
             pattern: '^[a-zA-Z0-9]{7}(,[a-zA-Z0-9]{7})*$'
           description: Comma-separated log IDs (7 chars each)
-          example: "aB3x9K,xY7z2M"
+          example: "sAbCdEf,fGhIjK"
       headers:
         - name: Authorization
           in: header
@@ -165,8 +176,8 @@ paths:
           description: Bearer token from log creation
           schema:
             type: string
-            pattern: '^Bearer [a-zA-Z0-9]{16}$'
-          example: "Bearer k7m2N9pQ4vL1xY6z"
+            pattern: '^Bearer [a-f0-9]{64}$'
+          example: "Bearer 3f9c1a7d5e2b8046c1d9f3a70b5e28461c7a9d0e3f5b8124c6d7e9f0a1b2c3d4"
       responses:
         '200':
           description: Deletion result
@@ -178,7 +189,7 @@ paths:
                 success: true
                 message: "Log deletion completed"
                 deleted:
-                  - "aB3x9K"
+                  - "sAbCdEf"
                 failed: []
                 total: 1
                 deletedCount: 1
@@ -210,6 +221,11 @@ paths:
         Clients and launchers should upload all three parts whenever available: game log (`latest.log`) + crash report (`crash-reports/*.txt`) + launcher log (`launcher.log`), and always provide the `source` identifier.
         
         Returns a log ID and a deletion token. **Save the token** — it cannot be recovered.
+
+        De-duplication: when an identical upload (same body + same attached files + same `source`)
+        already exists, the response reuses the existing `id`, but the returned `token` is a fresh
+        value that was **not** stored and therefore cannot delete that log. Use the token from the
+        original upload. The response also carries `deduplicated: true` in this case.
       operationId: createLogV1
       requestBody:
         required: true
@@ -268,10 +284,11 @@ paths:
               example:
                 success: true
                 message: "Log submitted successfully"
-                id: "aB3x9K"
-                url: "https://logshare.cn/aB3x9K"
-                raw: "https://api.logshare.cn/v1/raw/aB3x9K"
-                token: "k7m2N9pQ4vL1xY6z"
+                id: "sAbCdEf"
+                url: "https://logshare.cn/sAbCdEf"
+                raw: "https://api.logshare.cn/v1/raw/sAbCdEf"
+                token: "3f9c1a7d5e2b8046c1d9f3a70b5e28461c7a9d0e3f5b8124c6d7e9f0a1b2c3d4"
+                deduplicated: false
         '400':
           $ref: '#/components/responses/BadRequest'
         '413':
@@ -293,7 +310,7 @@ paths:
             type: string
             pattern: '^[a-zA-Z0-9]{7}(,[a-zA-Z0-9]{7})*$'
           description: Comma-separated log IDs (7 chars each)
-          example: "aB3x9K,xY7z2M"
+          example: "sAbCdEf,fGhIjK"
       headers:
         - name: Authorization
           in: header
@@ -301,8 +318,8 @@ paths:
           description: Bearer token from log creation
           schema:
             type: string
-            pattern: '^Bearer [a-zA-Z0-9]{16}$'
-          example: "Bearer k7m2N9pQ4vL1xY6z"
+            pattern: '^Bearer [a-f0-9]{64}$'
+          example: "Bearer 3f9c1a7d5e2b8046c1d9f3a70b5e28461c7a9d0e3f5b8124c6d7e9f0a1b2c3d4"
       responses:
         '200':
           description: Deletion result
@@ -314,7 +331,7 @@ paths:
                 success: true
                 message: "Log deletion completed"
                 deleted:
-                  - "aB3x9K"
+                  - "sAbCdEf"
                 failed: []
                 total: 1
                 deletedCount: 1
@@ -347,7 +364,7 @@ paths:
           schema:
             type: string
             pattern: '^[a-zA-Z0-9]{7}$'
-          example: "aB3x9K"
+          example: "sAbCdEf"
       responses:
         '200':
           description: Log metadata
@@ -385,15 +402,15 @@ paths:
           schema:
             type: string
             pattern: '^[a-zA-Z0-9]{7}$'
-          example: "aB3x9K"
+          example: "sAbCdEf"
       headers:
         - name: Authorization
           in: header
           required: true
           schema:
             type: string
-            pattern: '^Bearer [a-zA-Z0-9]{16}$'
-          example: "Bearer k7m2N9pQ4vL1xY6z"
+            pattern: '^Bearer [a-f0-9]{64}$'
+          example: "Bearer 3f9c1a7d5e2b8046c1d9f3a70b5e28461c7a9d0e3f5b8124c6d7e9f0a1b2c3d4"
       responses:
         '200':
           description: OK
@@ -424,7 +441,7 @@ paths:
           schema:
             type: string
             pattern: '^[a-zA-Z0-9]{7}$'
-          example: "aB3x9K"
+          example: "sAbCdEf"
       responses:
         '200':
           description: Log metadata
@@ -435,7 +452,7 @@ paths:
                 properties:
                   success: { type: boolean, example: true }
                   message: { type: string, example: "Log metadata retrieved successfully" }
-                  id: { type: string, example: "aB3x9K" }
+                  id: { type: string, example: "sAbCdEf" }
                   size: { type: integer }
                   lines: { type: integer }
                   created: { type: integer, nullable: true }
@@ -467,15 +484,15 @@ paths:
           schema:
             type: string
             pattern: '^[a-zA-Z0-9]{7}$'
-          example: "aB3x9K"
+          example: "sAbCdEf"
       headers:
         - name: Authorization
           in: header
           required: true
           schema:
             type: string
-            pattern: '^Bearer [a-zA-Z0-9]{16}$'
-          example: "Bearer k7m2N9pQ4vL1xY6z"
+            pattern: '^Bearer [a-f0-9]{64}$'
+          example: "Bearer 3f9c1a7d5e2b8046c1d9f3a70b5e28461c7a9d0e3f5b8124c6d7e9f0a1b2c3d4"
       responses:
         '200':
           description: OK
@@ -589,7 +606,7 @@ paths:
           schema:
             type: string
             pattern: '^[a-zA-Z0-9]{7}$'
-          example: "aB3x9K"
+          example: "sAbCdEf"
       responses:
         '200':
           description: Raw log content
@@ -623,7 +640,7 @@ paths:
           schema:
             type: string
             pattern: '^[a-zA-Z0-9]{7}$'
-          example: "aB3x9K"
+          example: "sAbCdEf"
         - name: filename
           in: path
           required: true
@@ -656,7 +673,7 @@ paths:
           schema:
             type: string
             pattern: '^[a-zA-Z0-9]{7}$'
-          example: "aB3x9K"
+          example: "sAbCdEf"
       responses:
         '200':
           description: Raw log content
@@ -687,7 +704,7 @@ paths:
           schema:
             type: string
             pattern: '^[a-zA-Z0-9]{7}$'
-          example: "aB3x9K"
+          example: "sAbCdEf"
         - name: filename
           in: path
           required: true
@@ -723,7 +740,7 @@ paths:
           schema:
             type: string
             pattern: '^[a-zA-Z0-9]{7}$'
-          example: "aB3x9K"
+          example: "sAbCdEf"
       responses:
         '200':
           description: Insights data
@@ -749,7 +766,7 @@ paths:
           schema:
             type: string
             pattern: '^[a-zA-Z0-9]{7}$'
-          example: "aB3x9K"
+          example: "sAbCdEf"
       responses:
         '200':
           description: Insights data
@@ -784,6 +801,40 @@ paths:
                 storageTime: 604800
         '429':
           $ref: '#/components/responses/RateLimited'
+  /v1/telemetry/report:
+    post:
+      tags: [Meta]
+      summary: Report client telemetry metrics
+      description: |
+        Accepts a batch of client-side telemetry items (`items` array), a bare
+        JSON array, or a single item object. Each item is one of `api`,
+        `web_vitals` or `error`. Batches are capped at 50 items per request;
+        endpoint paths are truncated to 200 chars and the endpoint leaderboard
+        caps at 2000 distinct keys per day (overflow is folded into `:other`).
+      operationId: reportTelemetry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                items:
+                  type: array
+                  maxItems: 50
+                  items:
+                    type: object
+                    additionalProperties: true
+      responses:
+        '200':
+          description: Metrics recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  processed: { type: integer }
   /v1/limits:
     get:
       tags: [Meta]
@@ -912,54 +963,29 @@ paths:
   /1/errors/rate:
     get:
       tags: [Meta]
-      summary: Rate limit status
+      summary: Rate-limit error probe
       description: |
-        Returns current rate limit counters for the requesting IP
-        
+        Always returns `429 Too Many Requests` with a `Retry-After` header.
+        Present only for backward compatibility.
+
         (Deprecated; use /v1/errors/rate instead)
       operationId: getRateLimitStatus
       deprecated: true
       responses:
-        '200':
-          description: Rate limit info
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RateLimitResponse'
-              example:
-                success: true
-                message: "OK"
-                limits:
-                  "POST /1/log":
-                    limit: 36000
-                    window: 60
-                    remaining: 35998
-                    reset: 1700000000
         '429':
           $ref: '#/components/responses/RateLimited'
   /v1/errors/rate:
     get:
       tags: [Meta]
-      summary: Rate limit status
+      summary: Rate-limit error probe
       description: |
-        Returns current rate limit counters for the requesting IP
+        Always returns `429 Too Many Requests` with a `Retry-After` header.
+        It exists so clients can exercise their rate-limit error handling; it
+        does **not** report counters. Actual limits are enforced at the edge:
+        nginx `limit_req` (30 r/s, burst 60) plus OpenLiteWaf CC defense
+        (240 requests / 10 s window).
       operationId: getRateLimitStatusV1
       responses:
-        '200':
-          description: Rate limit info
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RateLimitResponse'
-              example:
-                success: true
-                message: "OK"
-                limits:
-                  "POST /v1/log":
-                    limit: 36000
-                    window: 60
-                    remaining: 35998
-                    reset: 1700000000
         '429':
           $ref: '#/components/responses/RateLimited'
   /v1/admin/logs:
@@ -1469,7 +1495,7 @@ components:
             type: string
     LogCreateResponse:
       type: object
-      required: [success, message, id, url, raw, token]
+      required: [success, message, id, url, raw, token, deduplicated]
       properties:
         success:
           type: boolean
@@ -1480,19 +1506,27 @@ components:
         id:
           type: string
           pattern: '^[a-zA-Z0-9]{7}$'
-          example: "aB3x9K"
+          example: "sAbCdEf"
         url:
           type: string
           format: uri
-          example: "https://logshare.cn/aB3x9K"
+          example: "https://logshare.cn/sAbCdEf"
         raw:
           type: string
           format: uri
-          example: "https://api.logshare.cn/1/raw/aB3x9K"
+          example: "https://api.logshare.cn/1/raw/sAbCdEf"
         token:
           type: string
-          pattern: '^[a-zA-Z0-9]{16}$'
-          example: "k7m2N9pQ4vL1xY6z"
+          pattern: '^[a-f0-9]{64}$'
+          description: Deletion token (SHA-256-sized hex string). Save it — it cannot be recovered.
+          example: "3f9c1a7d5e2b8046c1d9f3a70b5e28461c7a9d0e3f5b8124c6d7e9f0a1b2c3d4"
+        deduplicated:
+          type: boolean
+          description: |
+            `true` when the upload matched an existing content fingerprint. In that
+            case the returned `token` was never stored and cannot delete the log;
+            use the token from the original upload.
+          example: false
     LogDeleteResponse:
       type: object
       required: [success, message, deleted, failed, total, deletedCount, failedCount]
@@ -1592,30 +1626,6 @@ components:
                 type: string
               data:
                 nullable: true
-    RateLimitResponse:
-      type: object
-      required: [success, message, limits]
-      properties:
-        success:
-          type: boolean
-        message:
-          type: string
-        limits:
-          type: object
-          additionalProperties:
-            type: object
-            required: [limit, window, remaining, reset]
-            properties:
-              limit:
-                type: integer
-              window:
-                type: integer
-                description: Window in seconds
-              remaining:
-                type: integer
-              reset:
-                type: integer
-                description: Unix timestamp
     MetadataEntry:
       type: object
       required: [key, value]
@@ -1670,7 +1680,7 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             success: false
-            error: "Invalid token for log: aB3x9K"
+            error: "Invalid token for log: sAbCdEf"
             code: 403
     NotFound:
       description: Log not found
@@ -1680,7 +1690,7 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             success: false
-            error: "Log not found: aB3x9K"
+            error: "Log not found: sAbCdEf"
             code: 404
     RateLimited:
       description: Rate limit exceeded

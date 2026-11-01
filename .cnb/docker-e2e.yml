@@ -21,7 +21,7 @@
     MARIADB_PASSWORD: ci-placeholder
     MARIADB_ROOT_PASSWORD: ci-placeholder
     REDIS_PASSWORD: ci-placeholder
-    ADMIN_TOKEN: ci-placeholder
+    ADMIN_TOKEN: ci-placeholder-admin-token-0123456789
     OPENLITEWAF_ADMIN_TOKEN: ci-openlitewaf-token
   stages:
     - name: 构建生产镜像
@@ -46,7 +46,7 @@
         sed -i 's/change-me/ci-placeholder/g' .env
         cat >> .env <<'ENVEOF'
         ADMIN_ENABLED=true
-        ADMIN_TOKEN=ci-placeholder
+        ADMIN_TOKEN=ci-placeholder-admin-token-0123456789
         OPENLITEWAF_ADMIN_TOKEN=ci-openlitewaf-token
         ENVEOF
         # compose 从 docker/ 目录读 .env，复制一份保持一致
@@ -123,7 +123,7 @@
         $UP exec -T -e OPENLITEWAF_ADMIN_TOKEN=ci-openlitewaf-token hyperf \
           php scripts/ci_e2e_test.php \
             --base-url="https://$DOMAIN" \
-            --admin-token=ci-placeholder \
+            --admin-token=ci-placeholder-admin-token-0123456789 \
             --waf-test || {
           echo "=== E2E 失败，输出容器日志 ==="; $UP logs; $UP down; exit 1
         }

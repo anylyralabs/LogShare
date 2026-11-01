@@ -2,6 +2,56 @@
 
 ## 1.8.4 — 2026-11-01
 
+第四期 Code Review 修复（`CRCLASH.md`）：5 项严重、21 项一般、16 项建议全部处理。
+
+### 安全
+
+- **去重命中时不再覆盖删除凭证**：`StorageInterface::Put()` 新增 `&$created` 出参，命中内容指纹时 `Log::put()` 跳过缓存写入；此前第二个上传者可用自己的 token 删除他人日志（IDOR）。
+- **删除 token 一律只比较哈希**：`Token` 改用 `fromHash()` 构造，存储格式为 `sha256:<hex>`，库里的值本身不再能作为凭证；旧记录在验证成功后惰性补前缀。
+- **默认凭据下线**：示例配置的 `admin.token` 置空，Compose 的 `ADMIN_ENABLED` 默认改为 `false`，`Config::validate()` 拒绝占位串与 <32 字符的 token。
+- **配置类名校验**：`filter.pre`、`storage.storages.*.class`、`cache.cacheId` 必须是存在且实现对应接口的类，避免一次误配置把上传打成 500。
+- **管理端 CORS 收紧**：`/admin` 路径只回显 `urls.corsOrigins` 白名单，公开端仍保持通配。
+- **加密失败 fail-closed**：`SecurityService::encryptSecret()` 失败时抛异常，绝不再静默落明文。
+- **IPv6 CIDR 支持**：`SecurityService::ipInCidr()` 覆盖 IPv6 网段，修复反代场景下按代理 IP 聚合封禁/限流。
+- 依赖升级修复 `symfony/http-foundation` 的 ReDoS（CVE-2026-108082）。
+
+### 修复
+
+- **同名附件 / 重复元数据键不再打成 500**：`UploadParser` 自动改名为 `name (2)`，`MetadataEntry::allFromArray()` 与 `MariaDbStorage` 双重去重。
+- **读路径不再执行分区 DDL**：`Log::renew()` 移除 1% 概率触发的 `ALTER TABLE`，回收只走事件与 Admin 端点；`dropPartition()` 只统计真正成功的分区。
+- **`MariaDbStorage::Update()` 不再谎报成功**：记录不存在时返回 `false`。
+- **`FilesystemStorage::Put()` 增加 ID 分配重试上限**，目录不可写时不再死循环。
+- **`source` 按字符截断**（`mb_strcut`），中文启动器名不再被切成非法 UTF-8。
+- **ZIP 解压改为流式读取**，避免按声明大小一次性分配内存。
+- **公开元信息过滤 `visible=false`**：`MetadataEntry::serializeVisible()`。
+- **`Config::Get()` 拒绝点路径**，运维脚本改用 `Get('admin')['token']`。
+- **审计日志轮转 + 尾部读取**，不再把整个文件读进内存。
+- **Redis `KEYS` 全部改为 `SCAN`**；`flushCache` 改用白名单，移除 `FLUSHDB` 快捷路径。
+- **遥测端点路径截断到 200 字符、端点键上限 2000**（超出归并 `:other`）；Redis 不可用时 `recordBatch()` 返回 0 而非谎报已处理。
+- **子表关联补 `created`**，版本/加载器统计与 `filesCount` 不再跨分区串行。
+- **上传路径改为只解析 64KB 头部**：3.5MB 日志从 1.9s 降到 13ms，全文分析移到 `/v1/insights` 首次访问。
+
+### 升级须知
+
+- 已有部署必须先执行 `php scripts/widen_token_column.php`，把 `logs.token` 从 `VARCHAR(64)` 扩到 `VARCHAR(80)`；该脚本幂等且只做 `ALTER TABLE`，不清数据。未执行时上传会以 `1406 Data too long` 失败。
+- `ADMIN_ENABLED` 默认值改为 `false`：升级后若未显式设置 `ADMIN_TOKEN`（≥32 字符），后台将保持关闭，需要时再手动开启。
+
+### 构建与 CI
+
+- GitHub Actions 改用 `scripts/ci_init_mariadb.sh` + mariadb 客户端导入，修复 `DELIMITER` 语句导致的必失败。
+- CNB 增加 Lua 回归 stage（WAF 规则 99 样本 + 两个逻辑套件）。
+- 覆盖率不再排除 `Storage` / `Data` / `Cache` / `Client`，风险最高的层恢复计入。
+- `composer.json` 补齐 `ext-curl` / `ext-openssl` / `ext-zip`，`license` 与 `LICENSE`（MIT）对齐。
+
+### 文档
+
+- README / API.md / openapi.yaml 同步：token 改为 64 位十六进制、限流口径改为边缘实现、Compose 服务数改为六个、去重语义与 `deduplicated` 字段、补录 `POST /v1/telemetry/report`。
+- `plan.md` 归档为 `docs/archive-rag-plan-2026-08.md` 并标注历史状态；根目录废弃的 AI/RAG 计划 `Plan.md` 删除。
+- `/errors/rate` 的 OpenAPI / Postman 示例改为「始终返回 429」；Postman 的 token 示例统一为 64 位十六进制并补 `deduplicated`，Admin Token 占位值清空。
+- `docker/mariadb-events.sql` 按当前 TTL 重新生成分区布局（此前只铺到 2026-10-23）。
+- 封禁文件改为原子写入并 `chmod 0600`；`runtime/dynamic_config.json` 与审计日志同步收紧权限。
+- WAF 内部调用的 `Host` 改为从 `urls.apiBaseUrl` 推导，测试部署不再需要改代码。
+
 ### 移除
 
 - **AI 智能诊断整体剥离**：移除 LogAgent、Agent 工具链、AI 分析微队列、SSE 输出层、AI 指标与领域知识管理；`/v1/ai/*`、`/v1/admin/ai/*`、`/v1/admin/system/queue` 及相关配置接口不再注册，统一返回 404。AI 功能由外部服务承接。

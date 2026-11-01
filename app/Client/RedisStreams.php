@@ -16,6 +16,7 @@ class RedisStreams extends RedisClient
     /**
      * XADD：'*' 由 Redis 生成 id；maxLen > 0 时按 MAXLEN ~ 近似裁剪。
      *
+     * @param array<string, string> $fields 字段名 => 值
      * @return string 新条目 id
      */
     public static function xAdd(string $key, array $fields, int $maxLen = 0): string
@@ -47,7 +48,7 @@ class RedisStreams extends RedisClient
     /**
      * XREADGROUP 读取新消息（'>'）。
      *
-     * @return array<int, array{0: string, 1: array}> [id, fields] 列表
+     * @return array<int, array{0: string, 1: array<string, string>}> [id, fields] 列表
      */
     public static function xReadGroup(string $group, string $consumer, string $key, int $blockMs, int $count = 1): array
     {
@@ -194,7 +195,7 @@ class RedisStreams extends RedisClient
     /**
      * XREAD（非组读）：中继端从 $fromId 之后阻塞读取事件流。
      *
-     * @return array<int, array{0: string, 1: array}> [id, fields] 列表
+     * @return array<int, array{0: string, 1: array<string, string>}> [id, fields] 列表
      */
     public static function xRead(string $key, string $fromId, int $blockMs, int $count = 100): array
     {
@@ -210,12 +211,15 @@ class RedisStreams extends RedisClient
      * 避免幽灵 ID 在 PEL 永久驻留。
      *
      * @param string &$cursor 扫描游标（传入起始游标，方法执行后更新为下一轮游标）
-     * @return array<int, array{0: string, 1: array}> [id, fields] 列表
+     * @return array<int, array{0: string, 1: array<string, string>}> [id, fields] 列表
      */
     public static function xAutoClaim(string $key, string $group, string $consumer, int $minIdleMs, int $count = 10, string &$cursor = '0-0'): array
     {
         $start = $cursor !== '' ? $cursor : '0-0';
         $reply = self::connection()->xautoclaim($key, $group, $consumer, $minIdleMs, $start, $count);
+        if (!is_array($reply)) {
+            return [];
+        }
         // phpredis 返回 [next-cursor, messages, deleted-ids]
         $cursor = isset($reply[0]) && is_string($reply[0]) && $reply[0] !== '' ? $reply[0] : '0-0';
         $messages = $reply[1] ?? [];
@@ -268,6 +272,8 @@ class RedisStreams extends RedisClient
      * phpredis 真实格式（见其 tests/RedisTest.php compareStreamIds）：
      *   [streamKey => [entryId => fields, ...]]
      * 外层兼容以 streamKey 为键的 map 与 [[streamKey => ...]] 数字列表两种形态。
+     *
+     * @return array<int, array{0: string, 1: array<string, string>}>
      */
     private static function flattenStreamReply(mixed $reply, string $key): array
     {

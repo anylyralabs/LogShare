@@ -18,6 +18,15 @@ final class AuditLogManager
     private const REDIS_KEY = 'audit:recent';
     private const MAX_RING_BUFFER = 1000;
 
+    /** 单个审计文件上限；超出后轮转，避免运营期单调增长 */
+    private const MAX_FILE_SIZE = 5 * 1024 * 1024;
+
+    /** 轮转保留份数 */
+    private const MAX_ROTATED_FILES = 5;
+
+    /** 从文件回退读取时最多扫描的行数（避免整文件读入内存） */
+    private const MAX_FILE_READ_BYTES = 2 * 1024 * 1024;
+
     /**
      * 记录一条管理操作审计日志。
      *
@@ -63,13 +72,38 @@ final class AuditLogManager
             }
         }
 
-        // 2. 本地持久化文件（按行追加）
+        // 2. 本地持久化文件（按行追加 + 超限轮转）
         $filePath = CORE_PATH . self::LOG_FILE;
         $dir = dirname($filePath);
         if (!is_dir($dir)) {
             @mkdir($dir, 0755, true);
         }
+        self::rotateIfOversized($filePath);
         @file_put_contents($filePath, $json . "\n", FILE_APPEND | LOCK_EX);
+        // 审计日志包含操作者 IP 与目标 ID，不允许组/其他用户读取
+        @chmod($filePath, 0600);
+    }
+
+    /**
+     * 审计文件超过上限时轮转，并只保留最近 N 份。
+     */
+    private static function rotateIfOversized(string $filePath): void
+    {
+        clearstatcache(true, $filePath);
+        if (!is_file($filePath) || (int) @filesize($filePath) < self::MAX_FILE_SIZE) {
+            return;
+        }
+
+        $rotated = $filePath . '.' . date('YmdHis');
+        if (!@rename($filePath, $rotated)) {
+            return;
+        }
+
+        $existing = glob($filePath . '.*') ?: [];
+        usort($existing, static fn(string $a, string $b): int => strcmp($b, $a));
+        foreach (array_slice($existing, self::MAX_ROTATED_FILES) as $stale) {
+            @unlink($stale);
+        }
     }
 
     /**
@@ -113,18 +147,14 @@ final class AuditLogManager
             }
         }
 
-        // 2. 若 Redis 无数据，回退读取本地日志文件
+        // 2. 若 Redis 无数据，回退读取本地日志文件（只读尾部窗口）
         if (empty($allEntries)) {
             $filePath = CORE_PATH . self::LOG_FILE;
-            if (is_file($filePath)) {
-                $lines = @file($filePath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
-                // 倒序：最新的排在前面
-                $lines = array_reverse($lines);
-                foreach ($lines as $line) {
-                    $dec = json_decode(trim($line), true);
-                    if (is_array($dec) && isset($dec['action'])) {
-                        $allEntries[] = $dec;
-                    }
+            $lines = self::readTailLines($filePath);
+            foreach (array_reverse($lines) as $line) {
+                $dec = json_decode(trim($line), true);
+                if (is_array($dec) && isset($dec['action'])) {
+                    $allEntries[] = $dec;
                 }
             }
         }
@@ -161,6 +191,44 @@ final class AuditLogManager
             'pageSize' => $pageSize,
             'items' => $items,
         ];
+    }
+
+    /**
+     * 从文件尾部读取若干行，避免把整个审计文件读进内存。
+     *
+     * @return string[]
+     */
+    private static function readTailLines(string $filePath): array
+    {
+        if (!is_file($filePath)) {
+            return [];
+        }
+
+        $size = (int) @filesize($filePath);
+        if ($size <= 0) {
+            return [];
+        }
+
+        $handle = @fopen($filePath, 'rb');
+        if ($handle === false) {
+            return [];
+        }
+
+        try {
+            $readBytes = min($size, self::MAX_FILE_READ_BYTES);
+            fseek($handle, $size - $readBytes);
+            $chunk = (string) fread($handle, $readBytes);
+        } finally {
+            fclose($handle);
+        }
+
+        $lines = preg_split('/\R/', $chunk) ?: [];
+        // 若读到的是窗口起点截断的半行，丢弃它
+        if ($readBytes < $size) {
+            array_shift($lines);
+        }
+
+        return array_values(array_filter($lines, static fn(string $l): bool => trim($l) !== ''));
     }
 
     /**

@@ -30,6 +30,10 @@ abstract class AbstractController
         }
     }
 
+    /**
+     * @param string|array<string, mixed>|null $content
+     * @param array<int, array{name: string, data?: string, size?: int}>|null $files
+     */
     protected function checkContentSecurity(string|array|null $content, ?array $files = null): void
     {
         if (is_string($content)) {
@@ -49,18 +53,25 @@ abstract class AbstractController
 
         if (!empty($files)) {
             foreach ($files as $f) {
-                if (is_array($f) && isset($f['data']) && is_string($f['data'])) {
+                if (isset($f['data'])) {
                     \App\System\SecurityService::validateContent($f['data']);
                 }
             }
         }
     }
 
+    /**
+     * @return string|ApiError|array<string, mixed>
+     */
     protected function parseContent(): string|ApiError|array
     {
         return (new ContentParser($this->request))->getContent();
     }
 
+    /**
+     * @param array<string, mixed>|string|ApiError $result
+     * @return string|array<string, mixed>
+     */
     protected function validateContentExists(array|string|ApiError $result): string|array
     {
         if ($result instanceof ApiError) {

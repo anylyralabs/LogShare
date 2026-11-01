@@ -73,6 +73,10 @@ class RateLimitMiddleware implements MiddlewareInterface
         return $handler->handle($request);
     }
 
+    /**
+     * @param array<string, mixed> $config
+     * @return array{0: int, 1: int}
+     */
     private static function limitsFor(string $method, string $path, array $config): array
     {
         $defaults = [(int) ($config['limit'] ?? 600), (int) ($config['window'] ?? 60)];

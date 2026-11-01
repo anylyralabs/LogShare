@@ -331,7 +331,16 @@ class AdminController extends AbstractController
         $body = $this->getParsedBody();
         $prefix = isset($body['prefix']) && is_string($body['prefix']) ? trim($body['prefix']) : 'log:*';
         $result = StorageHealthService::flushCache($prefix);
-        AuditLogManager::record('system.cache_flush', $prefix, $result, true, 'admin', $this->getClientIp());
+
+        // 前缀不在白名单属于调用错误，必须显式 400；
+        // Redis 不可用（cleared=false 且无 error）是环境降级，保持原有 200 语义。
+        if (isset($result['error'])) {
+            AuditLogManager::record('system.cache_flush', $prefix, $result, false, 'admin', $this->getClientIp());
+            throw new ApiError(400, (string) $result['error']);
+        }
+
+        $success = $result['cleared'] === true;
+        AuditLogManager::record('system.cache_flush', $prefix, $result, $success, 'admin', $this->getClientIp());
         return $this->respondSuccess($result, "Cache flush executed for prefix: {$prefix}");
     }
 

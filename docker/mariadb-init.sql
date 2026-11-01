@@ -24,7 +24,9 @@
 CREATE TABLE IF NOT EXISTS logs (
     id CHAR(6) NOT NULL,
     data LONGTEXT NOT NULL,
-    token VARCHAR(64) NULL,
+    -- 删除凭证的存储形态是 `sha256:<64 位十六进制>`（71 字符）。
+    -- 列宽必须留足，否则插入会以 1406 Data too long 失败。
+    token VARCHAR(80) NULL,
     source VARCHAR(64) NULL,
     created INT UNSIGNED NOT NULL,
     fingerprint CHAR(32) NULL,

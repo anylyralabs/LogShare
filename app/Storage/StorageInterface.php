@@ -14,17 +14,18 @@ interface StorageInterface
      * @param Token|null $token
      * @param MetadataEntry[] $metadata
      * @param string|null $source
-     * @param array|null $files Additional files stored under the same id: [['name' => string, 'data' => string, 'size' => int]]
+     * @param array<int, array{name: string, data?: string, size?: int}>|null $files Additional files stored under the same id
+     * @param bool|null $created 出参：true 表示新建，false 表示命中已有记录（去重）
      * @return ?\App\Id ID or null
      */
-    public static function Put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null, ?array $files = null): ?\App\Id;
+    public static function Put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null, ?array $files = null, ?bool &$created = null): ?\App\Id;
 
     /**
      * Update existing log data and optional files by id
      *
      * @param \App\Id $id
      * @param string $data
-     * @param array|null $files
+     * @param array<int, array{name: string, data?: string, size?: int}>|null $files
      * @return bool
      */
     public static function Update(\App\Id $id, string $data, ?array $files = null): bool;
@@ -34,7 +35,7 @@ interface StorageInterface
      *
      * @param \App\Id $id
      * @param bool $includeContent
-     * @return array|null Data array or null
+     * @return array<string, mixed>|null Data array or null
      */
     public static function Get(\App\Id $id, bool $includeContent = true): ?array;
 

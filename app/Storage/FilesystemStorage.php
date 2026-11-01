@@ -2,7 +2,6 @@
 
 namespace App\Storage;
 
-use App\Data\MetadataEntry;
 use App\Data\Token;
 
 class FilesystemStorage implements StorageInterface
@@ -10,7 +9,14 @@ class FilesystemStorage implements StorageInterface
     /** 单次 CleanupExpired 最多检查的文件数，限制请求路径内的清理工作量 */
     private const CLEANUP_BATCH = 500;
 
-    public static function Put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null, ?array $files = null): ?\App\Id
+    /** 分配新 ID 的最大重试次数（O_EXCL 占位冲突上限） */
+    private const MAX_ID_ATTEMPTS = 8;
+
+    /**
+     * @param \App\Data\MetadataEntry[] $metadata
+     * @param array<int, array{name: string, data?: string, size?: int}>|null $files
+     */
+    public static function Put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null, ?array $files = null, ?bool &$created = null): ?\App\Id
     {
         $config = \App\Config::Get("filesystem");
         $basePath = CORE_PATH . $config['path'];
@@ -22,14 +28,22 @@ class FilesystemStorage implements StorageInterface
         $id = new \App\Id();
         $id->setStorage("f");
 
-        // 用 O_EXCL 语义（fopen 'x'）原子占位，防止并发下 rename 静默覆盖已有日志
-        $path = $basePath . $id->getRaw();
-        do {
+        // 用 O_EXCL 语义（fopen 'x'）原子占位，防止并发下 rename 静默覆盖已有日志。
+        // 必须设重试上限：目录不可写、inode 耗尽或磁盘满时，无界循环会把 worker 打死。
+        $placeholder = false;
+        for ($attempt = 0; $attempt < self::MAX_ID_ATTEMPTS; $attempt++) {
             $id->regenerate();
             $path = $basePath . $id->getRaw();
             $placeholder = @fopen($path, 'x');
-        } while ($placeholder === false);
+            if ($placeholder !== false) {
+                break;
+            }
+        }
+        if ($placeholder === false) {
+            throw new \RuntimeException("Filesystem storage could not allocate a free log file under {$basePath}; check directory permissions and free space.");
+        }
         fclose($placeholder);
+        $created = true;
 
         $document = [
             'data' => $data,
@@ -45,15 +59,15 @@ class FilesystemStorage implements StorageInterface
         }
 
         $document['source'] = ($source !== null && trim($source) !== '')
-            ? substr(trim($source), 0, 64)
+            ? mb_strcut(trim($source), 0, 64, 'UTF-8')
             : '未指定';
 
         if (!empty($files)) {
             $document['files'] = array_values(array_map(
                 fn($file) => [
                     'name' => $file['name'],
-                    'data' => $file['data'],
-                    'size' => strlen($file['data']),
+                    'data' => $file['data'] ?? '',
+                    'size' => strlen($file['data'] ?? ''),
                 ],
                 $files
             ));
@@ -75,6 +89,36 @@ class FilesystemStorage implements StorageInterface
         return $id;
     }
 
+    /**
+     * 把遗留的无前缀 token 哈希补齐 `sha256:` 前缀（惰性迁移用）。
+     */
+    public static function UpgradeToken(\App\Id $id, string $normalizedToken): bool
+    {
+        $config = \App\Config::Get("filesystem");
+        $path = CORE_PATH . $config['path'] . $id->getRaw();
+
+        if (!is_file($path)) {
+            return false;
+        }
+        $raw = @file_get_contents($path);
+        if ($raw === false || $raw === '') {
+            return false;
+        }
+        $document = json_decode($raw, true);
+        if (!is_array($document)) {
+            return false;
+        }
+        if (isset($document['token']) && is_string($document['token'])
+            && !str_starts_with($document['token'], \App\Data\Token::HASH_PREFIX)) {
+            $document['token'] = $normalizedToken;
+            self::writeAtomically($path, $document);
+        }
+        return true;
+    }
+
+    /**
+     * @param array<int, array{name: string, data?: string, size?: int}>|null $files
+     */
     public static function Update(\App\Id $id, string $data, ?array $files = null): bool
     {
         $config = \App\Config::Get("filesystem");
@@ -100,8 +144,8 @@ class FilesystemStorage implements StorageInterface
             $document['files'] = array_values(array_map(
                 fn($file) => [
                     'name' => $file['name'],
-                    'data' => $file['data'],
-                    'size' => strlen($file['data']),
+                    'data' => $file['data'] ?? '',
+                    'size' => strlen($file['data'] ?? ''),
                 ],
                 $files
             ));
@@ -123,6 +167,9 @@ class FilesystemStorage implements StorageInterface
         return true;
     }
 
+    /**
+     * @return array<string, mixed>|null
+     */
     public static function Get(\App\Id $id, bool $includeContent = true): ?array
     {
         $config = \App\Config::Get("filesystem");
@@ -153,6 +200,9 @@ class FilesystemStorage implements StorageInterface
         ];
     }
 
+    /**
+     * @param array<string, mixed>|null $document
+     */
     private static function readCreated(string $path, ?array $document): ?int
     {
         $meta = $path . '.meta.json';
@@ -165,6 +215,9 @@ class FilesystemStorage implements StorageInterface
         return isset($document['created']) ? (int) $document['created'] : null;
     }
 
+    /**
+     * @param array<string, mixed> $document
+     */
     private static function writeAtomically(string $path, array $document): bool
     {
         $json = json_encode($document, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
@@ -272,6 +325,10 @@ class FilesystemStorage implements StorageInterface
     /**
      * Normalize file entries; drops `data` when $includeContent is false.
      */
+    /**
+     * @param array<int|string, mixed> $files
+     * @return array<int, array{name: string, data?: string, size?: int}>
+     */
     private static function normalizeFiles(array $files, bool $includeContent): array
     {
         $result = [];
@@ -292,6 +349,26 @@ class FilesystemStorage implements StorageInterface
     }
 
     public static function List(int $limit = 20, int $offset = 0, ?string $source = null, ?int $since = null, ?int $until = null, ?string $keyword = null): array
+    {
+        $entries = self::scanEntries($source, $since, $until, $keyword);
+        return array_slice($entries, $offset, $limit);
+    }
+
+    public static function Count(?string $source = null, ?int $since = null, ?int $until = null, ?string $keyword = null): int
+    {
+        // Count 与 List 的过滤逻辑完全一致；一次扫描后复用同一实现，
+        // 避免管理端每次翻页都做两遍「scandir + 逐文件读 meta」。
+        return count(self::scanEntries($source, $since, $until, $keyword));
+    }
+
+    /**
+     * 扫描目录并返回符合过滤条件的条目（按 created 倒序）。
+     *
+     * List 与 Count 共用，避免两处逻辑漂移与重复 IO。
+     *
+     * @return array<int, array{id: string, size: int, source: string, created: int, filesCount: int}>
+     */
+    private static function scanEntries(?string $source, ?int $since, ?int $until, ?string $keyword): array
     {
         $config = \App\Config::Get("filesystem");
         $basePath = CORE_PATH . ($config['path'] ?? '/storage/');
@@ -377,84 +454,6 @@ class FilesystemStorage implements StorageInterface
         }
 
         usort($entries, fn($a, $b) => $b['created'] <=> $a['created']);
-        return array_slice($entries, $offset, $limit);
-    }
-
-    public static function Count(?string $source = null, ?int $since = null, ?int $until = null, ?string $keyword = null): int
-    {
-        $config = \App\Config::Get("filesystem");
-        $basePath = CORE_PATH . ($config['path'] ?? '/storage/');
-        if (!is_dir($basePath)) {
-            return 0;
-        }
-
-        $files = scandir($basePath);
-        if ($files === false) {
-            return 0;
-        }
-
-        $rawKeyword = $keyword;
-        if ($keyword !== null && $keyword !== '') {
-            try {
-                $parsedId = new \App\Id($keyword);
-                $rawKeyword = $parsedId->getRaw();
-            } catch (\Throwable) {
-                // Not a valid full ID
-            }
-        }
-
-        $count = 0;
-        foreach ($files as $file) {
-            if ($file === '.' || $file === '..' || str_ends_with($file, '.meta.json')) {
-                continue;
-            }
-
-            if ($keyword !== null && $keyword !== '') {
-                if (!str_contains($file, $rawKeyword ?? $keyword)) {
-                    continue;
-                }
-            }
-
-            $metaPath = $basePath . $file . '.meta.json';
-            $metaData = file_exists($metaPath) ? json_decode((string) file_get_contents($metaPath), true) : null;
-            $created = is_array($metaData) && isset($metaData['created']) ? (int) $metaData['created'] : (int) filemtime($basePath . $file);
-
-            if ($since !== null && $created < $since) {
-                continue;
-            }
-            if ($until !== null && $created > $until) {
-                continue;
-            }
-
-            $itemSource = is_array($metaData) && isset($metaData['source']) && (string) $metaData['source'] !== ''
-                ? (string) $metaData['source']
-                : null;
-            if ($itemSource === null) {
-                $rawContent = @file_get_contents($basePath . $file);
-                if ($rawContent !== false) {
-                    $doc = json_decode($rawContent, true);
-                    if (is_array($doc) && isset($doc['source']) && (string) $doc['source'] !== '') {
-                        $itemSource = (string) $doc['source'];
-                    }
-                }
-            }
-            $itemSource = $itemSource ?? '未指定';
-
-            if ($source !== null && $source !== '') {
-                if ($source === '未指定') {
-                    if ($itemSource !== '未指定') {
-                        continue;
-                    }
-                } else {
-                    if ($itemSource !== $source) {
-                        continue;
-                    }
-                }
-            }
-
-            $count++;
-        }
-
-        return $count;
+        return $entries;
     }
 }

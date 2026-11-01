@@ -87,6 +87,9 @@ final class AnalyticsService
 
     // ── MariaDB 实现 ──
 
+    /**
+     * @return array{days: int, total: int, sources: array<int, array{source: string, count: int, percentage: float}>}
+     */
     private static function getSourceStatsFromMariaDb(int $days, int $since): array
     {
         try {
@@ -130,12 +133,19 @@ final class AnalyticsService
         }
     }
 
+    /**
+     * @return array{days: int, versions: array<int, array{name: string, count: int, percentage: float}>, loaders: array<int, array{name: string, count: int, percentage: float}>}
+     */
     private static function getVersionStatsFromMariaDb(int $days, int $since): array
     {
         try {
             // 1. 版本分布（优先查元数据显式标注）
+            // 子表主键为 (log_id, key, created)，必须连 created 一起关联：
+            // 父表分区被丢弃而子表残留时，同 ID 的新日志会继承孤儿子行。
             $versionRows = Db::table('log_metadata as m')
-                ->join('logs as l', 'm.log_id', '=', 'l.id')
+                ->join('logs as l', function ($join) {
+                    $join->on('m.log_id', '=', 'l.id')->on('m.created', '=', 'l.created');
+                })
                 ->select(['m.value as ver', Db::raw('COUNT(*) as cnt')])
                 ->where('l.created', '>=', $since)
                 ->where('m.key', 'version')
@@ -148,6 +158,7 @@ final class AnalyticsService
 
             $versionTotal = 0;
             $versions = [];
+            /** @var \stdClass $r */
             foreach ($versionRows as $r) {
                 $c = (int) $r->cnt;
                 $versionTotal += $c;
@@ -156,7 +167,9 @@ final class AnalyticsService
 
             // 2. 加载器分布（优先查元数据显式标注）
             $loaderRows = Db::table('log_metadata as m')
-                ->join('logs as l', 'm.log_id', '=', 'l.id')
+                ->join('logs as l', function ($join) {
+                    $join->on('m.log_id', '=', 'l.id')->on('m.created', '=', 'l.created');
+                })
                 ->select(['m.value as ldr', Db::raw('COUNT(*) as cnt')])
                 ->where('l.created', '>=', $since)
                 ->whereIn('m.key', ['type', 'loader', 'modloader'])
@@ -169,6 +182,7 @@ final class AnalyticsService
 
             $loaderTotal = 0;
             $loaders = [];
+            /** @var \stdClass $r */
             foreach ($loaderRows as $r) {
                 $c = (int) $r->cnt;
                 $loaderTotal += $c;
@@ -200,7 +214,9 @@ final class AnalyticsService
                         // 关联 logs 并带上时间窗：matched_mods 是历史累积的元数据表，
                         // 不带窗口取样会把已过期周期的版本算进当前图表
                         $mods = Db::table('log_metadata as m')
-                            ->join('logs as l', 'm.log_id', '=', 'l.id')
+                            ->join('logs as l', function ($join) {
+                                $join->on('m.log_id', '=', 'l.id')->on('m.created', '=', 'l.created');
+                            })
                             ->where('m.key', 'matched_mods')
                             ->where('l.created', '>=', $since)
                             ->whereNotNull('m.value')
@@ -286,6 +302,9 @@ final class AnalyticsService
         }
     }
 
+    /**
+     * @return array{days: int, total_logs: int, total_bytes: int, trends: array<int, array{date: string, count: int, bytes: int}>}
+     */
     private static function getTrendsFromMariaDb(int $days, int $since): array
     {
         try {
@@ -326,6 +345,7 @@ final class AnalyticsService
                 $dateMap[$d] = ['date' => $d, 'count' => 0, 'bytes' => 0];
             }
 
+            /** @var \stdClass $r */
             foreach ($rows as $r) {
                 $d = (string) $r->dt;
                 $c = (int) $r->cnt;
@@ -360,6 +380,9 @@ final class AnalyticsService
 
     // ── Filesystem 实现 ──
 
+    /**
+     * @return array{days: int, total: int, sources: array<int, array{source: string, count: int, percentage: float}>}
+     */
     private static function getSourceStatsFromFilesystem(int $days, int $since): array
     {
         $config = Config::Get('filesystem');
@@ -409,6 +432,9 @@ final class AnalyticsService
         ];
     }
 
+    /**
+     * @return array{days: int, versions: array<int, array{name: string, count: int, percentage: float}>, loaders: array<int, array{name: string, count: int, percentage: float}>}
+     */
     private static function getVersionStatsFromFilesystem(int $days, int $since): array
     {
         $config = Config::Get('filesystem');
@@ -478,6 +504,9 @@ final class AnalyticsService
         return ['days' => $days, 'versions' => $versions, 'loaders' => $loaders];
     }
 
+    /**
+     * @return array{days: int, total_logs: int, total_bytes: int, trends: array<int, array{date: string, count: int, bytes: int}>}
+     */
     private static function getTrendsFromFilesystem(int $days, int $since): array
     {
         $config = Config::Get('filesystem');

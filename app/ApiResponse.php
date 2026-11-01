@@ -22,9 +22,10 @@ class ApiResponse
 
         if ($data !== null) {
             if (is_object($data) || (is_array($data) && !array_is_list($data))) {
-                $keys = is_object($data) ? array_keys(get_object_vars($data)) : array_keys($data);
-                if (array_intersect($keys, self::RESERVED_KEYS) === []) {
-                    foreach ($data as $key => $value) {
+                /** @var array<string, mixed> $fields */
+                $fields = is_object($data) ? get_object_vars($data) : $data;
+                if (array_intersect(array_keys($fields), self::RESERVED_KEYS) === []) {
+                    foreach ($fields as $key => $value) {
                         $response->$key = $value;
                     }
                     return self::jsonResponse($response, $httpCode);

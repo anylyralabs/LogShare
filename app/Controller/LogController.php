@@ -50,23 +50,33 @@ class LogController extends AbstractController
         $token = new Token();
 
         $id = $log->put($content, $token, $metadata, $source, $files);
+        if ($id === null) {
+            throw new ApiError(500, 'Failed to persist log.');
+        }
 
-        // 统一异步队列事件调度：反混淆、关键词安全审核等后台排队异步执行
-        EventQueue::dispatch(EventQueue::EVENT_LOG_UPLOADED, [
-            'logId' => $id->get(),
-            'clientIp' => $this->getClientRealIp(),
-            'source' => $source,
-        ]);
+        // 去重命中时没有新内容落库，也没有新的审核/反混淆工作可做：
+        // 重复派发只会让队列做无用功，还会重复审核已通过的日志。
+        if (!$log->wasDeduplicated()) {
+            // 统一异步队列事件调度：反混淆、关键词安全审核等后台排队异步执行
+            EventQueue::dispatch(EventQueue::EVENT_LOG_UPLOADED, [
+                'logId' => $id->get(),
+                'clientIp' => $this->getClientRealIp(),
+                'source' => $source,
+            ]);
+        }
 
         $urls = \App\Config::Get('urls');
         $apiPrefix = $this->apiPrefix();
 
-        return $this->respondSuccess([
+        $payload = [
             'id' => $id->get(),
             'url' => $urls['baseUrl'] . "/" . $id->get(),
             'raw' => $urls['apiBaseUrl'] . "/{$apiPrefix}/raw/" . $id->get(),
             'token' => $token->get(),
-        ], 'Log submitted successfully');
+            'deduplicated' => $log->wasDeduplicated(),
+        ];
+
+        return $this->respondSuccess($payload, 'Log submitted successfully');
     }
 
     #[DeleteMapping(path: 'log/{id}')]

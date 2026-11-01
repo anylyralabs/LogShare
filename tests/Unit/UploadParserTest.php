@@ -141,3 +141,35 @@ test('validateFileName rejects unsafe names', function () {
     expect(App\UploadParser::validateFileName("test\nfile.log"))->toBeFalse();
     expect(App\UploadParser::validateFileName("test\x1bfile.log"))->toBeFalse();
 });
+test('parseFiles renames duplicate file names instead of colliding', function () {
+    $result = App\UploadParser::parseFiles([
+        ['name' => 'main.log', 'content' => 'a'],
+        ['name' => 'main.log', 'content' => 'b'],
+        ['name' => 'main.log', 'content' => 'c'],
+    ]);
+
+    expect($result)->toBeArray();
+    expect(array_column($result, 'name'))->toBe(['main.log', 'main (2).log', 'main (3).log']);
+    expect(array_column($result, 'data'))->toBe(['a', 'b', 'c']);
+});
+
+test('parseFiles dedupes names across zip and plain entries', function () {
+    $zip = makeZip(['latest.log' => 'from zip']);
+
+    $result = App\UploadParser::parseFiles([
+        ['name' => 'latest.log', 'content' => 'from body'],
+        ['name' => 'bundle.zip', 'content' => $zip],
+    ]);
+
+    expect($result)->toBeArray();
+    expect(array_column($result, 'name'))->toBe(['latest.log', 'latest (2).log']);
+});
+
+test('parseFiles keeps names without extension readable when deduped', function () {
+    $result = App\UploadParser::parseFiles([
+        ['name' => 'crash-reports/report', 'content' => 'a'],
+        ['name' => 'crash-reports/report', 'content' => 'b'],
+    ]);
+
+    expect(array_column($result, 'name'))->toBe(['crash-reports/report', 'crash-reports/report (2)']);
+});

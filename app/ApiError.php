@@ -12,6 +12,9 @@ class ApiError extends \Exception implements \JsonSerializable
         parent::__construct($message, $httpCode);
     }
 
+    /**
+     * @return array{success: false, error: string, code: int}
+     */
     public function jsonSerialize(): array
     {
         return [

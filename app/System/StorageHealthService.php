@@ -82,11 +82,17 @@ final class StorageHealthService
         ];
     }
 
+    /** 允许清理的缓存前缀白名单：避免一次误传 '*' 清空整个 Redis DB（含事件队列与封禁记录）。 */
+    public const FLUSHABLE_PREFIXES = ['log:*', 'telemetry:*', 'audit:*', 'syslog:*'];
+
     /**
-     * 手动清空或按前缀清理 Redis 缓存。
+     * 按白名单前缀清理 Redis 缓存。
      *
-     * @param ?string $prefix 缓存前缀，如 'log:*' 或 'all'
-     * @return array{cleared: bool, deletedKeys: int, prefix: string}
+     * 不再支持 `all` / `*`：FLUSHDB 会连带清掉事件队列 Stream、消费组、
+     * 封禁记录与动态配置版本号，属于不可逆运维事故。
+     *
+     * @param ?string $prefix 缓存前缀，必须是 FLUSHABLE_PREFIXES 之一
+     * @return array{cleared: bool, deletedKeys: int, prefix: string, error?: string}
      */
     public static function flushCache(?string $prefix = null): array
     {
@@ -102,14 +108,31 @@ final class StorageHealthService
         $prefix = trim((string) ($prefix ?? 'log:*'));
         $deletedCount = 0;
 
+        if (!in_array($prefix, self::FLUSHABLE_PREFIXES, true)) {
+            return [
+                'cleared' => false,
+                'deletedKeys' => 0,
+                'prefix' => $prefix,
+                'error' => 'Prefix not allowed. Allowed: ' . implode(', ', self::FLUSHABLE_PREFIXES),
+            ];
+        }
+
         try {
-            if ($prefix === 'all' || $prefix === '*') {
-                $redis->flushDB();
-                $deletedCount = 1;
-            } else {
-                $keys = $redis->keys($prefix);
-                if (is_array($keys) && !empty($keys)) {
-                    $deletedCount = (int) $redis->del(...$keys);
+            // SCAN 分批，避免 KEYS 阻塞单线程 Redis
+            $keys = [];
+            $iterator = null;
+            do {
+                $batch = $redis->scan($iterator, $prefix, 200);
+                if (is_array($batch)) {
+                    foreach ($batch as $found) {
+                        $keys[] = $found;
+                    }
+                }
+            } while ($iterator !== 0 && $iterator !== null && count($keys) < 50000);
+
+            if (!empty($keys)) {
+                foreach (array_chunk($keys, 500) as $chunk) {
+                    $deletedCount += (int) $redis->del(...$chunk);
                 }
             }
 
@@ -279,6 +302,9 @@ final class StorageHealthService
         }
     }
 
+    /**
+     * @return array<string, mixed>
+     */
     private static function getFilesystemHealth(): array
     {
         $config = Config::Get('filesystem');

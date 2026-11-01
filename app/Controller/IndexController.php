@@ -24,6 +24,7 @@ class IndexController extends AbstractController
             'GET /1/raw/{id}/{filename:.+}',
             'GET /1/log/{id}',
             'GET /1/insights/{id}',
+            'POST /1/telemetry/report',
             'POST /v1/log',
             'DELETE /v1/log/{id}',
             'POST /v1/analyse',
@@ -34,6 +35,7 @@ class IndexController extends AbstractController
             'GET /v1/raw/{id}/{filename:.+}',
             'GET /v1/log/{id}',
             'GET /v1/insights/{id}',
+            'POST /v1/telemetry/report',
         ];
 
         return \App\ApiResponse::success(['endpoints' => $endpoints], 'LogShare API');

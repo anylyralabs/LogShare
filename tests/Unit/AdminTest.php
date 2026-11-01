@@ -21,7 +21,7 @@ beforeEach(function () {
     $cfg = $this->origData;
     $cfg['admin'] = [
         'enabled' => true,
-        'token' => 'test-admin-secret-token',
+        'token' => 'test-admin-secret-token-0123456789abcdef',
     ];
     $cfg['filesystem']['path'] = substr($this->tmpDir, strlen(CORE_PATH)) . '/';
     $cfg['storage']['storageId'] = 'f';
@@ -62,7 +62,7 @@ test('AdminAuthMiddleware rejects when admin is disabled', function () {
     $this->dataProp->setValue(null, $cfg);
 
     $middleware = new AdminAuthMiddleware();
-    $request = (new Request('GET', '/v1/admin/logs'))->withHeader('Authorization', 'Bearer test-admin-secret-token');
+    $request = (new Request('GET', '/v1/admin/logs'))->withHeader('Authorization', 'Bearer test-admin-secret-token-0123456789abcdef');
     $handler = Mockery::mock(RequestHandlerInterface::class);
 
     expect(fn() => $middleware->process($request, $handler))
@@ -90,12 +90,12 @@ test('AdminAuthMiddleware accepts valid Bearer token and X-Admin-Token', functio
     $handler->shouldReceive('handle')->twice()->andReturn(new Response());
 
     // Bearer token
-    $bearerReq = (new Request('GET', '/v1/admin/logs'))->withHeader('Authorization', 'Bearer test-admin-secret-token');
+    $bearerReq = (new Request('GET', '/v1/admin/logs'))->withHeader('Authorization', 'Bearer test-admin-secret-token-0123456789abcdef');
     $resp1 = $middleware->process($bearerReq, $handler);
     expect($resp1)->toBeInstanceOf(\Psr\Http\Message\ResponseInterface::class);
 
     // X-Admin-Token
-    $headerReq = (new Request('GET', '/v1/admin/logs'))->withHeader('X-Admin-Token', 'test-admin-secret-token');
+    $headerReq = (new Request('GET', '/v1/admin/logs'))->withHeader('X-Admin-Token', 'test-admin-secret-token-0123456789abcdef');
     $resp2 = $middleware->process($headerReq, $handler);
     expect($resp2)->toBeInstanceOf(\Psr\Http\Message\ResponseInterface::class);
 });

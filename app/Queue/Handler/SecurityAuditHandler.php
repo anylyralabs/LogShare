@@ -48,8 +48,9 @@ class SecurityAuditHandler implements EventHandlerInterface
             try {
                 SecurityService::validateContent($content);
                 foreach ($files as $f) {
-                    if ($f['data'] !== '') {
-                        SecurityService::validateContent($f['data']);
+                    $fileData = $f['data'] ?? '';
+                    if ($fileData !== '') {
+                        SecurityService::validateContent($fileData);
                     }
                 }
             } catch (ApiError $e) {

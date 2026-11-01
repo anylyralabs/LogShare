@@ -16,7 +16,7 @@ beforeEach(function () {
     $cfg = $this->origData;
     $cfg['admin'] = [
         'enabled' => true,
-        'token' => 'test-admin-secret-token',
+        'token' => 'test-admin-secret-token-0123456789abcdef',
     ];
     $this->dataProp->setValue(null, $cfg);
 

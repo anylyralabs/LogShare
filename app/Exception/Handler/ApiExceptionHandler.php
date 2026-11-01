@@ -12,7 +12,7 @@ use Throwable;
 
 class ApiExceptionHandler extends ExceptionHandler
 {
-    public function handle(Throwable $throwable, ResponseInterface $response)
+    public function handle(Throwable $throwable, ResponseInterface $response): ResponseInterface
     {
         $this->stopPropagation();
 
@@ -24,7 +24,7 @@ class ApiExceptionHandler extends ExceptionHandler
         return $response
             ->withStatus($throwable->getHttpCode())
             ->withHeader('Content-Type', 'application/json; charset=utf-8')
-            ->withBody(new SwooleStream(json_encode($throwable->jsonSerialize(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)));
+            ->withBody(new SwooleStream((string) json_encode($throwable->jsonSerialize(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)));
     }
 
     public function isValid(Throwable $throwable): bool

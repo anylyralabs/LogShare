@@ -37,7 +37,7 @@ private function ensureSchema(): void
         Db::statement("CREATE TABLE IF NOT EXISTS logs (
             id CHAR(6) NOT NULL,
             data LONGTEXT NOT NULL,
-            token VARCHAR(64) NULL,
+            token VARCHAR(80) NULL,
             source VARCHAR(64) NULL,
             created INT UNSIGNED NOT NULL,
             fingerprint CHAR(32) NULL,

@@ -155,7 +155,7 @@
                                     "value": "application/json"
                                 }
                             ],
-                            "body": "{\n  \"success\": \"<boolean>\",\n  \"message\": \"<string>\",\n  \"id\": \"l9re3JY\",\n  \"url\": \"<uri>\",\n  \"raw\": \"<uri>\",\n  \"token\": \"q2HClbCuMjFcDpHo\"\n}",
+                            "body": "{\n  \"success\": \"<boolean>\",\n  \"message\": \"<string>\",\n  \"id\": \"sAbCdEf\",\n  \"url\": \"<uri>\",\n  \"raw\": \"<uri>\",\n  \"token\": \"3f9c1a7d5e2b8046c1d9f3a70b5e28461c7a9d0e3f5b8124c6d7e9f0a1b2c3d4\",\n  \"deduplicated\": false\n}",
                             "cookie": [],
                             "_postman_previewlanguage": "json"
                         },
@@ -904,7 +904,7 @@
                                     "value": "application/json"
                                 }
                             ],
-                            "body": "{\n  \"success\": \"<boolean>\",\n  \"message\": \"<string>\",\n  \"id\": \"l9re3JY\",\n  \"url\": \"<uri>\",\n  \"raw\": \"<uri>\",\n  \"token\": \"q2HClbCuMjFcDpHo\"\n}",
+                            "body": "{\n  \"success\": \"<boolean>\",\n  \"message\": \"<string>\",\n  \"id\": \"sAbCdEf\",\n  \"url\": \"<uri>\",\n  \"raw\": \"<uri>\",\n  \"token\": \"3f9c1a7d5e2b8046c1d9f3a70b5e28461c7a9d0e3f5b8124c6d7e9f0a1b2c3d4\",\n  \"deduplicated\": false\n}",
                             "cookie": [],
                             "_postman_previewlanguage": "json"
                         },
@@ -4017,7 +4017,7 @@
                     "request": {
                         "name": "Rate limit status",
                         "description": {
-                            "content": "Returns current rate limit counters for the requesting IP\n\n(Deprecated; use /v1/errors/rate instead)\n",
+                            "content": "Always returns `429 Too Many Requests` with a `Retry-After` header. This endpoint exists so clients can exercise rate-limit error handling; it does not report counters. Actual limits are enforced at the edge.\n\n(Deprecated; use /v1/errors/rate instead)",
                             "type": "text/plain"
                         },
                         "url": {
@@ -4044,44 +4044,7 @@
                     },
                     "response": [
                         {
-                            "id": "e009b863-dca3-4ecb-ab03-0ad8043a6c92",
-                            "name": "Rate limit info",
-                            "originalRequest": {
-                                "url": {
-                                    "path": [
-                                        "1",
-                                        "errors",
-                                        "rate"
-                                    ],
-                                    "host": [
-                                        "{{baseUrl}}"
-                                    ],
-                                    "query": [],
-                                    "variable": []
-                                },
-                                "header": [
-                                    {
-                                        "key": "Accept",
-                                        "value": "application/json"
-                                    }
-                                ],
-                                "method": "GET",
-                                "body": {}
-                            },
-                            "status": "OK",
-                            "code": 200,
-                            "header": [
-                                {
-                                    "key": "Content-Type",
-                                    "value": "application/json"
-                                }
-                            ],
-                            "body": "{\n  \"success\": \"<boolean>\",\n  \"message\": \"<string>\",\n  \"limits\": {\n    \"key_0\": {\n      \"limit\": \"<integer>\",\n      \"window\": \"<integer>\",\n      \"remaining\": \"<integer>\",\n      \"reset\": \"<integer>\"\n    },\n    \"key_1\": {\n      \"limit\": \"<integer>\",\n      \"window\": \"<integer>\",\n      \"remaining\": \"<integer>\",\n      \"reset\": \"<integer>\"\n    },\n    \"key_2\": {\n      \"limit\": \"<integer>\",\n      \"window\": \"<integer>\",\n      \"remaining\": \"<integer>\",\n      \"reset\": \"<integer>\"\n    },\n    \"key_3\": {\n      \"limit\": \"<integer>\",\n      \"window\": \"<integer>\",\n      \"remaining\": \"<integer>\",\n      \"reset\": \"<integer>\"\n    }\n  }\n}",
-                            "cookie": [],
-                            "_postman_previewlanguage": "json"
-                        },
-                        {
-                            "id": "1d6279f5-062d-4d16-a71b-47686e287b2c",
+                            "id": "f9c31947-7552-4abc-a14f-aa61cade8bd6",
                             "name": "Rate limit exceeded",
                             "originalRequest": {
                                 "url": {
@@ -4113,13 +4076,12 @@
                                     "value": "application/json"
                                 },
                                 {
-                                    "disabled": false,
+                                    "key": "Retry-After",
+                                    "value": "<integer>",
                                     "description": {
                                         "content": "Seconds until reset",
                                         "type": "text/plain"
-                                    },
-                                    "key": "Retry-After",
-                                    "value": "<integer>"
+                                    }
                                 }
                             ],
                             "body": "{\n  \"success\": \"<boolean>\",\n  \"error\": \"<string>\",\n  \"code\": \"<integer>\"\n}",
@@ -4138,7 +4100,7 @@
                     "request": {
                         "name": "Rate limit status",
                         "description": {
-                            "content": "Returns current rate limit counters for the requesting IP\n",
+                            "content": "Always returns `429 Too Many Requests` with a `Retry-After` header. This endpoint exists so clients can exercise rate-limit error handling; it does not report counters. Actual limits are enforced at the edge.",
                             "type": "text/plain"
                         },
                         "url": {
@@ -4165,44 +4127,7 @@
                     },
                     "response": [
                         {
-                            "id": "23792d55-bd10-4f30-922a-cb6d988adb2a",
-                            "name": "Rate limit info",
-                            "originalRequest": {
-                                "url": {
-                                    "path": [
-                                        "v1",
-                                        "errors",
-                                        "rate"
-                                    ],
-                                    "host": [
-                                        "{{baseUrl}}"
-                                    ],
-                                    "query": [],
-                                    "variable": []
-                                },
-                                "header": [
-                                    {
-                                        "key": "Accept",
-                                        "value": "application/json"
-                                    }
-                                ],
-                                "method": "GET",
-                                "body": {}
-                            },
-                            "status": "OK",
-                            "code": 200,
-                            "header": [
-                                {
-                                    "key": "Content-Type",
-                                    "value": "application/json"
-                                }
-                            ],
-                            "body": "{\n  \"success\": \"<boolean>\",\n  \"message\": \"<string>\",\n  \"limits\": {\n    \"key_0\": {\n      \"limit\": \"<integer>\",\n      \"window\": \"<integer>\",\n      \"remaining\": \"<integer>\",\n      \"reset\": \"<integer>\"\n    },\n    \"key_1\": {\n      \"limit\": \"<integer>\",\n      \"window\": \"<integer>\",\n      \"remaining\": \"<integer>\",\n      \"reset\": \"<integer>\"\n    },\n    \"key_2\": {\n      \"limit\": \"<integer>\",\n      \"window\": \"<integer>\",\n      \"remaining\": \"<integer>\",\n      \"reset\": \"<integer>\"\n    },\n    \"key_3\": {\n      \"limit\": \"<integer>\",\n      \"window\": \"<integer>\",\n      \"remaining\": \"<integer>\",\n      \"reset\": \"<integer>\"\n    }\n  }\n}",
-                            "cookie": [],
-                            "_postman_previewlanguage": "json"
-                        },
-                        {
-                            "id": "e4540ead-cbfb-43c7-8808-69f501a9b97d",
+                            "id": "dbd0460f-88c3-4228-8570-8648dba0693f",
                             "name": "Rate limit exceeded",
                             "originalRequest": {
                                 "url": {
@@ -4234,13 +4159,12 @@
                                     "value": "application/json"
                                 },
                                 {
-                                    "disabled": false,
+                                    "key": "Retry-After",
+                                    "value": "<integer>",
                                     "description": {
                                         "content": "Seconds until reset",
                                         "type": "text/plain"
-                                    },
-                                    "key": "Retry-After",
-                                    "value": "<integer>"
+                                    }
                                 }
                             ],
                             "body": "{\n  \"success\": \"<boolean>\",\n  \"error\": \"<string>\",\n  \"code\": \"<integer>\"\n}",
@@ -4638,7 +4562,7 @@
         },
         {
             "key": "adminToken",
-            "value": "change-this-to-a-secure-random-token"
+            "value": ""
         }
     ],
     "info": {
@@ -4646,7 +4570,7 @@
         "name": "LogShare API",
         "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
         "description": {
-            "content": "Minecraft / Hytale log analysis and sharing platform.\n\n## Authentication\n\nMost endpoints are public. Log deletion requires a Bearer token returned on creation.\n\n## Rate Limiting\n\nAll endpoints are rate limited per IP (default: 36,000 requests/minute).\nExceeding returns `429 Too Many Requests` with `Retry-After` header.\n\n## Content Filtering\n\nAll submitted logs are pre-filtered for:\n- IPv4/IPv6 addresses (full & compressed)\n- UUIDs (standard, brace, URN formats)\n- Xbox XUIDs (16-digit decimal)\n- Session/auth tokens (JWT, Bearer, access_token)\n- Client/device/instance IDs\n- Minecraft coordinates (BlockPos, Vec3d, command formats)\n- Usernames (Windows/Linux paths, USERNAME=)\n- Access tokens (various JSON keys, headers)\n\nFilters run in the above order. Original content is not stored.\n",
+            "content": "Minecraft / Hytale log analysis and sharing platform.\n\n## Authentication\n\nMost endpoints are public. Log deletion requires a Bearer token returned on creation.\n\n## Rate Limiting\n\nRate limiting is enforced at the edge: nginx `limit_req` (30 r/s, burst 60) plus OpenLiteWaf CC defense (240 requests / 10 s window). CC overflow returns `429 Too Many Requests` with `Retry-After`; `limit_req` overflow returns `503`. Neither bans the IP (only accumulated signature strikes do).\n\n## Content Filtering\n\nAll submitted logs are pre-filtered for:\n- IPv4/IPv6 addresses (full & compressed)\n- UUIDs (standard, brace, URN formats)\n- Xbox XUIDs (16-digit decimal)\n- Session/auth tokens (JWT, Bearer, access_token)\n- Client/device/instance IDs\n- Minecraft coordinates (BlockPos, Vec3d, command formats)\n- Usernames (Windows/Linux paths, USERNAME=)\n- Access tokens (various JSON keys, headers)\n\nFilters run in the above order. Original content is not stored.\n",
             "type": "text/plain"
         }
     }

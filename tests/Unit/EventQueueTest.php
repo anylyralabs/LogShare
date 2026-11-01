@@ -71,7 +71,7 @@ afterEach(function () {
     if (is_file($rulesFile)) {
         @unlink($rulesFile);
     }
-    $bansFile = CORE_PATH . '/runtime/ip_bans.json';
+    $bansFile = CORE_PATH . '/runtime/security_bans.json';
     if (is_file($bansFile)) {
         @unlink($bansFile);
     }

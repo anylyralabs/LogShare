@@ -63,15 +63,15 @@ jobs:
       - name: Copy Config
         run: cp Config.inc.example.php Config.inc.php
 
+      - name: Install MariaDB client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mariadb-client
+
       - name: Initialize MariaDB Schema & Events
         run: |
-          php scripts/sync_mariadb_events.php
-          php -r '
-          $pdo = new PDO("mysql:host=127.0.0.1;dbname=logshare", "root", "root", [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-          $pdo->exec(file_get_contents("docker/mariadb-init.sql"));
-          $pdo->exec(file_get_contents("docker/mariadb-events.sql"));
-          echo "schema and events initialized\n";
-          '
+          # 必须用 mysql/mariadb 客户端：mariadb-events.sql 含 `DELIMITER $$`
+          # 存储过程，PDO::exec() 不支持客户端指令，会直接 ERROR 1064。
+          # 与 CNB 共用同一份初始化脚本（它会自己先生成 events.sql）。
+          sh scripts/ci_init_mariadb.sh
 
       - name: Run Tests
         if: matrix.php-version != '8.4'
@@ -234,7 +234,7 @@ jobs:
         run: |
           php bin/hyperf.php start > /tmp/hyperf.log 2>&1 &
           sleep 15
-          php scripts/ci_e2e_test.php --base-url=http://127.0.0.1:9501 --admin-token=ci-test-token || {
+          php scripts/ci_e2e_test.php --base-url=http://127.0.0.1:9501 --admin-token=ci-test-token-0123456789abcdef || {
             echo '=== hyperf.log ==='
             cat /tmp/hyperf.log
             exit 1
@@ -249,7 +249,7 @@ jobs:
           REDIS_HOST: 127.0.0.1
           REDIS_PORT: 6379
           ADMIN_ENABLED: 'true'
-          ADMIN_TOKEN: 'ci-test-token'
+          ADMIN_TOKEN: 'ci-test-token-0123456789abcdef'
 
   docker:
     name: Docker Build

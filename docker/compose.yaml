@@ -92,7 +92,8 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
-      ADMIN_ENABLED: ${ADMIN_ENABLED:-true}
+      # 默认关闭：管理端凭证必须由部署方显式提供，不能让默认值把后台暴露到公网
+      ADMIN_ENABLED: ${ADMIN_ENABLED:-false}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
       # 边缘 WAF 解封令牌的调用方（Admin 后台点"解封"时内部调用 https://nginx/security/unban）。
       # OpenLiteWaf/data 保持只读挂载：应用容器不需要、也不应有权改写 nginx 的权威状态文件

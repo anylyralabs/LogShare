@@ -100,7 +100,7 @@
       REDIS_HOST=redis
       REDIS_PORT=6379
       ADMIN_ENABLED=true
-      ADMIN_TOKEN=ci-test-token
+      ADMIN_TOKEN=ci-test-token-0123456789abcdef
       ENVEOF
 
   - name: composer 校验与代码风格
@@ -162,7 +162,7 @@
       # 取不到报告时不中断流水线，避免覆盖率基建问题阻塞真实回归
       breakIfNoCoverage: false
 
-  - name: 静态分析（PHPStan level 5）
+  - name: 静态分析（PHPStan level 7）
     script: |
       set -eu
       docker run --rm -v "$CNB_BUILD_WORKSPACE:/app" -w /app \
@@ -173,6 +173,22 @@
       set -eu
       docker run --rm -v "$CNB_BUILD_WORKSPACE:/app" -w /app \
         "$(cat .ci-image)" sh -lc 'set -e; composer test:architecture'
+
+  # WAF 规则与统计口径的回归：此前只能人工执行，误封类改动没有任何门禁。
+  # 子模块未初始化时直接失败，避免「文件不在就静默跳过」。
+  - name: Lua 回归（OpenLiteWaf / OpenLiteStats）
+    script: |
+      set -eu
+      test -f OpenLiteWaf/lua/openlitewaf.lua || { echo "OpenLiteWaf submodule 缺失"; exit 1; }
+      test -f OpenLiteStats/lua/openlitestats.lua || { echo "OpenLiteStats submodule 缺失"; exit 1; }
+      docker run --rm -v "$CNB_BUILD_WORKSPACE:/app" -w /app \
+        "$(cat .ci-image)" sh -lc '
+          set -e
+          php OpenLiteWaf/tests/openlitewaf_regex_test.php
+          lua5.1 OpenLiteWaf/tests/openlitewaf_logic_test.lua
+          lua5.1 OpenLiteStats/tests/openlitestats_logic_test.lua
+          luac5.1 -p OpenLiteWaf/lua/*.lua OpenLiteStats/lua/*.lua
+        '
 
   - name: 启动冒烟测试（Swoole 常驻进程）
     script: |
@@ -193,7 +209,7 @@
           if [ "$ready" != "1" ]; then
             echo "=== 服务启动超时 ==="; cat /tmp/hyperf.log; exit 1
           fi
-          php scripts/ci_e2e_test.php --base-url=http://127.0.0.1:9501 --admin-token=ci-test-token || {
+          php scripts/ci_e2e_test.php --base-url=http://127.0.0.1:9501 --admin-token=ci-test-token-0123456789abcdef || {
             echo "=== hyperf.log ==="; cat /tmp/hyperf.log; exit 1
           }
         '

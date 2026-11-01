@@ -49,6 +49,9 @@ final class LogPartitionManager
     /** 单次清理允许丢弃的分区数上限，防止一次 DROP 过于激进 */
     private const MAX_DROP_PER_RUN = 60;
 
+    /** 兜底分区存在性检查的进程内缓存时长（秒）：避免每次清理都扫 information_schema */
+    private const FALLBACK_CHECK_TTL = 300;
+
 
     /**
      * 分区名：p + 日期（UTC），便于按名字直接定位某个整日的分区。
@@ -114,8 +117,11 @@ final class LogPartitionManager
                 if ($limit-- <= 0) {
                     return $dropped;
                 }
-                self::dropPartition($table, $name);
-                $dropped++;
+                // 只统计真正删掉的分区：失败却被计入会让面板谎报回收成功，
+                // 同时也掩盖「父表已删、子表仍在」的孤儿行来源。
+                if (self::dropPartition($table, $name)) {
+                    $dropped++;
+                }
             }
         }
 
@@ -128,6 +134,12 @@ final class LogPartitionManager
      */
     public static function ensureFallbackPartition(): void
     {
+        static $checkedAt = 0;
+        if ($checkedAt !== 0 && (time() - $checkedAt) < self::FALLBACK_CHECK_TTL) {
+            return;
+        }
+        $checkedAt = time();
+
         $existing = self::existingPartitions();
 
         foreach (self::TABLES as $table) {
@@ -188,12 +200,14 @@ final class LogPartitionManager
         return array_keys($candidates);
     }
 
-    private static function dropPartition(string $table, string $partitionName): void
+    private static function dropPartition(string $table, string $partitionName): bool
     {
         try {
             Db::statement("ALTER TABLE `{$table}` DROP PARTITION `{$partitionName}`");
+            return true;
         } catch (\Throwable $e) {
             \App\Syslog::error('LogPartitionManager', "failed to drop {$table}.{$partitionName}: " . $e->getMessage());
+            return false;
         }
     }
 }

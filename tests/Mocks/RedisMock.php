@@ -146,6 +146,33 @@ class RedisMock
         return $remaining > 0 ? $remaining : -2;
     }
 
+    /**
+     * SCAN 游标遍历。生产代码用 SCAN 替代 KEYS 以避免阻塞 Redis，
+     * mock 需要提供同样的语义：第一次返回全部匹配项并把游标置 0。
+     */
+    public function scan(&$iterator, string $pattern = '*', int $count = 0): array|false
+    {
+        self::guard();
+        $matches = $this->keys($pattern);
+        // 必须与 phpredis 一致：遍历结束时游标是 int 0，
+        // 调用方用 `!== 0` 严格比较，字符串 '0' 会导致死循环。
+        $iterator = 0;
+        return $matches;
+    }
+
+    /** @param array<string, string> $fields */
+    public function hExists(string $key, string $field): bool
+    {
+        self::guard();
+        return isset(self::$hashes[$key][$field]);
+    }
+
+    public function hLen(string $key): int
+    {
+        self::guard();
+        return isset(self::$hashes[$key]) ? count(self::$hashes[$key]) : 0;
+    }
+
     public function keys(string $pattern): array
     {
         $allKeys = array_unique(array_merge(
@@ -154,7 +181,13 @@ class RedisMock
             array_keys(self::$hashes),
             array_keys(self::$streams)
         ));
-        $regex = '/^' . str_replace('*', '.*', preg_quote($pattern, '/')) . '$/';
+        // 必须先按段分割再 preg_quote，否则 `*` 会先被转义成 `\*`，
+        // 后续的 str_replace('*', ...) 就再也匹配不到，key 永远返回空数组。
+        $regexParts = array_map(
+            static fn(string $part): string => preg_quote($part, '/'),
+            explode('*', $pattern)
+        );
+        $regex = '/^' . implode('.*', $regexParts) . '$/';
         return array_values(array_filter($allKeys, fn($k) => preg_match($regex, $k)));
     }
 

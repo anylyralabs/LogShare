@@ -2,7 +2,6 @@
 
 namespace App\Storage;
 
-use App\Data\MetadataEntry;
 use App\Data\Token;
 use Hyperf\DbConnection\Db;
 
@@ -25,10 +24,14 @@ class MariaDbStorage implements StorageInterface
     /** 单次 CleanupExpired 最多丢弃的分区数上限，限制请求路径内的清理工作量 */
     private const CLEANUP_BATCH = 60;
 
-    public static function Put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null, ?array $files = null): ?\App\Id
+    /**
+     * @param \App\Data\MetadataEntry[] $metadata
+     * @param array<int, array{name: string, data?: string, size?: int}>|null $files
+     */
+    public static function Put(string $data, ?Token $token = null, array $metadata = [], ?string $source = null, ?array $files = null, ?bool &$created = null): ?\App\Id
     {
         $normalizedSource = ($source !== null && trim($source) !== '')
-            ? substr(trim($source), 0, 64)
+            ? mb_strcut(trim($source), 0, 64, 'UTF-8')
             : '未指定';
 
         // 内容指纹：正文 + 附加文件 + 来源。命中已有指纹说明同一份内容被重复
@@ -36,33 +39,48 @@ class MariaDbStorage implements StorageInterface
         $fingerprint = self::fingerprint($data, $files, $normalizedSource);
         $existingId = self::findByFingerprint($fingerprint);
         if ($existingId !== null) {
+            // 去重命中：token 未写入存储，调用方不得用本次 token 覆盖缓存，
+            // 否则第二个上传者会取得该日志的删除凭证。
+            $created = false;
             return new \App\Id($existingId);
         }
+
+        $created = true;
 
         $id = new \App\Id();
         $id->setStorage('s');
 
         // 协程并发下 idExists 预检与 insert 之间存在 TOCTOU 窗口，唯一键冲突时
-        // 重新生成 ID 重试（预检仍保留，用于消除绝大多数冲突）
+        // 重新生成 ID 重试。ID 生成同样设上限：库连接异常时不能让 worker 空转。
         $maxAttempts = 5;
-        for ($attempt = 0; ; $attempt++) {
-            do {
+        for ($attempt = 0; $attempt < $maxAttempts; $attempt++) {
+            for ($generated = 0; $generated < $maxAttempts; $generated++) {
                 $id->regenerate();
-            } while (self::idExists($id->getRaw()));
+                if (!self::idExists($id->getRaw())) {
+                    break;
+                }
+            }
 
             try {
                 Db::transaction(function () use ($id, $data, $token, $metadata, $normalizedSource, $files, $fingerprint) {
                     self::insertLog($id->getRaw(), $data, $token, $metadata, $normalizedSource, $files, $fingerprint);
                 });
-                break;
+                return $id;
             } catch (\Throwable $e) {
+                // 并发上传同一份内容时唯一键可能落在 fingerprint 上：
+                // 此时换 ID 无济于事，重新查一次指纹并按去重命中返回。
+                $existingId = self::findByFingerprint($fingerprint);
+                if ($existingId !== null) {
+                    $created = false;
+                    return new \App\Id($existingId);
+                }
                 if ($attempt >= $maxAttempts - 1 || !self::isDuplicateKeyError($e)) {
                     throw $e;
                 }
             }
         }
 
-        return $id;
+        throw new \RuntimeException('Failed to allocate a unique log id after retries.');
     }
 
     /**
@@ -71,6 +89,9 @@ class MariaDbStorage implements StorageInterface
      * 采用 xxh128（非加密哈希，速度约为 SHA-256 的十倍量级），10MB 正文的
      * 计算开销在毫秒级，对上传延迟无感知。附加文件按名称排序后参与计算，使
      * 同一批文件无论上传顺序如何都能得到相同指纹。
+     */
+    /**
+     * @param array<int, array{name: string, data?: string, size?: int}>|null $files
      */
     public static function fingerprint(string $data, ?array $files, string $source): string
     {
@@ -82,7 +103,7 @@ class MariaDbStorage implements StorageInterface
         if (!empty($files)) {
             $parts = [];
             foreach ($files as $file) {
-                $parts[] = [(string) ($file['name'] ?? ''), (string) ($file['data'] ?? '')];
+                $parts[] = [$file['name'], (string) ($file['data'] ?? '')];
             }
             usort($parts, static fn(array $a, array $b): int => strcmp($a[0], $b[0]));
             foreach ($parts as [$name, $content]) {
@@ -121,10 +142,29 @@ class MariaDbStorage implements StorageInterface
         return $raw === null ? null : \App\Id::fromRaw('s', (string) $raw)->get();
     }
 
+    /**
+     * 把遗留的无前缀 token 哈希补齐 `sha256:` 前缀（惰性迁移用）。
+     */
+    public static function UpgradeToken(\App\Id $id, string $normalizedToken): bool
+    {
+        return Db::table(self::TABLE_LOGS)
+            ->where('id', $id->getRaw())
+            ->where('token', 'not like', \App\Data\Token::HASH_PREFIX . '%')
+            ->update(['token' => $normalizedToken]) >= 0;
+    }
+
+    /**
+     * @param array<int, array{name: string, data?: string, size?: int}>|null $files
+     */
     public static function Update(\App\Id $id, string $data, ?array $files = null): bool
     {
         $rawId = $id->getRaw();
         $created = self::currentCreated($rawId);
+        // 记录不存在时不能谎报成功：调用方会据此刷新缓存、掩盖数据丢失。
+        // 注意不能改用 update() 的受影响行数判断——内容未变化时它同样返回 0。
+        if ($created === null) {
+            return false;
+        }
         return Db::transaction(function () use ($rawId, $created, $data, $files) {
             $updated = Db::table(self::TABLE_LOGS)->where('id', $rawId)->update(['data' => $data]);
             if ($files !== null) {
@@ -135,7 +175,7 @@ class MariaDbStorage implements StorageInterface
                         $fileData = $file['data'] ?? '';
                         $rows[] = [
                             'log_id' => $rawId,
-                            'name' => $file['name'] ?? '',
+                            'name' => $file['name'],
                             'data' => $fileData,
                             'size' => isset($file['size']) ? (int) $file['size'] : strlen($fileData),
                             'created' => $created,
@@ -153,14 +193,18 @@ class MariaDbStorage implements StorageInterface
      *
      * Update 会重写 log_files 的行，而子表主键包含 created，只有沿用父表当前
      * 的 created 才能保证子表行落在与父表一致的分区里，便于随父表一同被
-     * DROP PARTITION 回收。
+     * DROP PARTITION 回收。记录不存在时返回 null。
      */
-    private static function currentCreated(string $rawId): int
+    private static function currentCreated(string $rawId): ?int
     {
         $created = Db::table(self::TABLE_LOGS)->where('id', $rawId)->value('created');
-        return $created === null ? time() : (int) $created;
+        return $created === null ? null : (int) $created;
     }
 
+    /**
+     * @param \App\Data\MetadataEntry[] $metadata
+     * @param array<int, array{name: string, data?: string, size?: int}>|null $files
+     */
     private static function insertLog(string $rawId, string $data, ?Token $token, array $metadata, string $source, ?array $files, string $fingerprint): void
     {
         // 子表的 created 必须与父表一致：分区回收按同一 created 边界进行，
@@ -182,19 +226,25 @@ class MariaDbStorage implements StorageInterface
 
         if (!empty($metadata)) {
             $rows = [];
+            $seenKeys = [];
             foreach ($metadata as $entry) {
                 $serialized = $entry->jsonSerialize();
                 if (empty($serialized['key'])) {
                     continue;
                 }
-                $value = $serialized['value'] ?? null;
+                // 入口已去重，这里再兜一次，避免新增调用点再次触发主键冲突
+                if (isset($seenKeys[$serialized['key']])) {
+                    continue;
+                }
+                $seenKeys[$serialized['key']] = true;
+                $value = $serialized['value'];
                 $rows[] = [
                     'log_id' => $rawId,
                     'key' => $serialized['key'],
                     // 非字符串值统一 JSON 序列化后存储；读取端 decodeMetadataValue 会做对称还原
                     'value' => is_string($value) ? $value : (is_null($value) ? null : json_encode($value, JSON_UNESCAPED_UNICODE)),
-                    'label' => $serialized['label'] ?? null,
-                    'visible' => (int) ($serialized['visible'] ?? true),
+                    'label' => $serialized['label'],
+                    'visible' => (int) $serialized['visible'],
                     'created' => $created,
                 ];
             }
@@ -205,16 +255,26 @@ class MariaDbStorage implements StorageInterface
 
         if (!empty($files)) {
             $rows = [];
+            $seenNames = [];
             foreach ($files as $file) {
+                $name = $file['name'];
+                // 同上：同名文件会撞 (log_id, name, created) 主键
+                if ($name === '' || isset($seenNames[$name])) {
+                    continue;
+                }
+                $seenNames[$name] = true;
+                $data = (string) ($file['data'] ?? '');
                 $rows[] = [
                     'log_id' => $rawId,
-                    'name' => $file['name'],
-                    'data' => $file['data'],
-                    'size' => strlen($file['data']),
+                    'name' => $name,
+                    'data' => $data,
+                    'size' => isset($file['size']) ? (int) $file['size'] : strlen($data),
                     'created' => $created,
                 ];
             }
-            Db::table(self::TABLE_FILES)->insert($rows);
+            if (!empty($rows)) {
+                Db::table(self::TABLE_FILES)->insert($rows);
+            }
         }
     }
 
@@ -254,6 +314,9 @@ class MariaDbStorage implements StorageInterface
         return Db::table(self::TABLE_LOGS)->where('id', $rawId)->exists();
     }
 
+    /**
+     * @return array<string, mixed>|null
+     */
     public static function Get(\App\Id $id, bool $includeContent = true): ?array
     {
         $log = Db::table(self::TABLE_LOGS)->where('id', $id->getRaw())->first();
@@ -266,29 +329,32 @@ class MariaDbStorage implements StorageInterface
         if (!$includeContent) {
             $fileQuery->select(['name', 'size']);
         }
+        /** @var \stdClass $file */
         foreach ($fileQuery->get() as $file) {
             $entry = [
-                'name' => $file->name,
+                'name' => (string) $file->name,
                 'size' => (int) $file->size,
             ];
             if ($includeContent) {
-                $entry['data'] = $file->data;
+                $entry['data'] = (string) $file->data;
             }
             $files[] = $entry;
         }
 
         $metadata = [];
+        /** @var \stdClass $m */
         foreach (Db::table(self::TABLE_METADATA)->where('log_id', $id->getRaw())->get() as $m) {
             $metadata[] = [
-                'key' => $m->key,
-                'value' => self::decodeMetadataValue($m->value),
-                'label' => $m->label,
+                'key' => (string) $m->key,
+                'value' => self::decodeMetadataValue($m->value === null ? null : (string) $m->value),
+                'label' => $m->label === null ? null : (string) $m->label,
                 'visible' => (bool) $m->visible,
             ];
         }
 
+        /** @var \stdClass $log */
         return [
-            'data' => $log->data,
+            'data' => (string) $log->data,
             'token' => $log->token,
             'metadata' => $metadata,
             'source' => $log->source !== null && (string) $log->source !== '' ? (string) $log->source : '未指定',
@@ -405,13 +471,14 @@ public static function CleanupExpired(): int
             Db::raw('OCTET_LENGTH(data) as size'),
             'source',
             'created',
-            Db::raw('(SELECT COUNT(*) FROM ' . self::TABLE_FILES . ' WHERE log_id = logs.id) as files_count'),
+            Db::raw('(SELECT COUNT(*) FROM ' . self::TABLE_FILES . ' f WHERE f.log_id = logs.id AND f.created = logs.created) as files_count'),
         ])->orderBy('created', 'desc')
           ->offset($offset)
           ->limit($limit)
           ->get();
 
         $results = [];
+        /** @var \stdClass $row */
         foreach ($rows as $row) {
             $fullId = \App\Id::fromRaw('s', (string) $row->id)->get();
             $results[] = [

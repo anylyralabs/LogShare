@@ -28,7 +28,7 @@ class ContentParser
     /**
      * Get the content from the http request
      *
-     * @return string|ApiError|array The content string, an ApiError on failure, or array for JSON requests
+     * @return string|ApiError|array<string, mixed> The content string, an ApiError on failure, or array for JSON requests
      */
     public function getContent(): string|ApiError|array
     {
@@ -118,8 +118,8 @@ class ContentParser
     /**
      * Parse JSON request data
      *
-     * @param array $data
-     * @return array|ApiError
+     * @param array<string, mixed> $data
+     * @return array<string, mixed>|ApiError
      */
     protected function parseJsonData(array $data): array|ApiError
     {
@@ -155,7 +155,9 @@ class ContentParser
 
         // Parse source if provided, or fallback to User-Agent launcher format, otherwise '未指定'
         if (isset($data['source']) && is_string($data['source']) && trim($data['source']) !== '') {
-            $result['source'] = substr(trim($data['source']), 0, 64);
+            // 按字符截断：按字节截断会把中文启动器名切成非法 UTF-8，
+            // 写 utf8mb4 时报 1366，或让 json_encode 直接失败。
+            $result['source'] = mb_strcut(trim($data['source']), 0, 64, 'UTF-8');
         } else {
             try {
                 $ua = $this->request->getHeaderLine('User-Agent');

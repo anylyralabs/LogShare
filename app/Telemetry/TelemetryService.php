@@ -17,6 +17,9 @@ final class TelemetryService
     private const TTL_WEEK = 604800; // 7 天
     private const MAX_BATCH_SIZE = 50;
 
+    /** 单日端点聚合键上限；超出的端点归并到 `:other`，避免 hash 无界增长 */
+    private const MAX_ENDPOINT_KEYS = 2000;
+
     /**
      * 接收并聚合客户端上报的遥测指标项。
      *
@@ -32,8 +35,8 @@ final class TelemetryService
         $items = array_slice($items, 0, self::MAX_BATCH_SIZE);
         $redis = RedisClient::getRedis();
         if ($redis === null) {
-            // Redis 不可用时安全跳过
-            return count($items);
+            // Redis 不可用时并没有真正落库，不能谎报“已处理”
+            return 0;
         }
 
         $now = time();
@@ -78,8 +81,11 @@ final class TelemetryService
                     $redis->hIncrBy($hourlyKey, 'errors', 1);
                 }
 
-                // 3. 接口维度排行榜
+                // 3. 接口维度排行榜（键数量封顶，超出归并到 :other）
                 $epField = "{$method} {$endpoint}";
+                if (!self::endpointKeyAllowed($redis, $endpointKey, $epField)) {
+                    $epField = "{$method} :other";
+                }
                 $redis->hIncrBy($endpointKey, "{$epField}:count", 1);
                 $redis->hIncrByFloat($endpointKey, "{$epField}:duration_sum", $duration);
 
@@ -352,13 +358,52 @@ final class TelemetryService
         }
 
         try {
-            $keys = $redis->keys('telemetry:*');
-            if (is_array($keys) && $keys !== []) {
-                $redis->del(...$keys);
+            // SCAN 分批清理，避免 KEYS 阻塞单线程 Redis
+            $keys = [];
+            $iterator = null;
+            do {
+                $batch = $redis->scan($iterator, 'telemetry:*', 200);
+                if (is_array($batch)) {
+                    foreach ($batch as $found) {
+                        $keys[] = $found;
+                    }
+                }
+            } while ($iterator !== 0 && $iterator !== null && count($keys) < 50000);
+
+            if ($keys !== []) {
+                foreach (array_chunk($keys, 500) as $chunk) {
+                    $redis->del(...$chunk);
+                }
             }
             return true;
         } catch (\Throwable) {
             return false;
+        }
+    }
+
+    /** 端点路径最大长度：超长路径会成为 Redis hash 的独立 field，可被用来撑爆内存 */
+    private const MAX_ENDPOINT_LENGTH = 200;
+
+    /**
+     * 端点键配额检查：已存在的键直接放行，新键在达到上限后归并到 `:other`。
+     *
+     * @param \Redis $redis 运行时保持 object 以兼容测试注入的 RedisMock
+     */
+    private static function endpointKeyAllowed(object $redis, string $hashKey, string $epField): bool
+    {
+        if (str_ends_with($epField, ':other')) {
+            return true;
+        }
+
+        try {
+            if ($redis->hExists($hashKey, "{$epField}:count")) {
+                return true;
+            }
+            $size = (int) $redis->hLen($hashKey);
+            return $size < self::MAX_ENDPOINT_KEYS * 2; // 每个端点占 count/sum 两个 field
+        } catch (\Throwable) {
+            // 配额检查失败不应阻断上报
+            return true;
         }
     }
 
@@ -371,7 +416,13 @@ final class TelemetryService
 
         // 过滤参数与特殊字符，归一化日志 ID 路径，如 /v1/raw/s123456/main -> /v1/raw/:id/main
         $path = preg_replace('#/(?:s|f)[0-9a-zA-Z]{6}(?=/|$)#', '/:id', $path);
-        return is_string($path) && $path !== '' ? $path : '/';
+        if (!is_string($path) || $path === '') {
+            return '/';
+        }
+
+        // 公开端点、无鉴权：不截断的话攻击者可用超长路径生成无限多互不相同的
+        // hash field（每个都带 :count 与 :duration_sum 两个键）。
+        return mb_strcut($path, 0, self::MAX_ENDPOINT_LENGTH, 'UTF-8');
     }
 
     private static function resolveStatusGroup(int $status): string
@@ -391,6 +442,9 @@ final class TelemetryService
         return 'status_2xx';
     }
 
+    /**
+     * @return array<string, array<string, mixed>>
+     */
     private static function buildDefaultVitals(): array
     {
         $vitals = [];
@@ -405,6 +459,9 @@ final class TelemetryService
         return $vitals;
     }
 
+    /**
+     * @return array<int, array<string, mixed>>
+     */
     private static function buildEmptyHourlyTrends(string $day): array
     {
         $trends = [];

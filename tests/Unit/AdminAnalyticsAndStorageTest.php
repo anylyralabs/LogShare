@@ -21,7 +21,7 @@ beforeEach(function () {
     $cfg = $this->origData;
     $cfg['admin'] = [
         'enabled' => true,
-        'token' => 'test-admin-secret-token',
+        'token' => 'test-admin-secret-token-0123456789abcdef',
     ];
     $cfg['filesystem']['path'] = substr($this->tmpDir, strlen(CORE_PATH)) . '/';
     $cfg['storage']['storageId'] = 'f';

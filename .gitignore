@@ -12,7 +12,8 @@
 /runtime/
 /.phpunit.cache/
 coverage/
-/rag/index.db
-/rag/public/
 scripts/__pycache__/
 /.qoder/
+/testlogs/
+/.opencode/
+/.vscode/

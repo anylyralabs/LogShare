@@ -23,6 +23,8 @@ set -eu
 cd "$(dirname "$0")/.."
 
 DB_HOST="${DB_HOST:-127.0.0.1}"
+# 与 CI 的两个环境保持一致：GitHub Actions 与 CNB 都用 root/root
+DB_ROOT_PASSWORD="${DB_ROOT_PASSWORD:-root}"
 CLI="${DB_CLIENT:-}"
 
 if [ -z "$CLI" ]; then
@@ -39,9 +41,9 @@ fi
 # 以 Config.inc.php 为 TTL 唯一来源重新生成 SQL
 php scripts/sync_mariadb_events.php
 
-"$CLI" -h "$DB_HOST" -uroot -proot logshare < docker/mariadb-init.sql
+"$CLI" -h "$DB_HOST" -uroot -p"$DB_ROOT_PASSWORD" logshare < docker/mariadb-init.sql
 
 grep -v '^CALL logshare_install_partitions();' docker/mariadb-events.sql \
-    | "$CLI" -h "$DB_HOST" -uroot -proot logshare
+    | "$CLI" -h "$DB_HOST" -uroot -p"$DB_ROOT_PASSWORD" logshare
 
 echo "schema and events initialized"

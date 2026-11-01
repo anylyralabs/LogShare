@@ -8,9 +8,18 @@ use App\Telemetry\TelemetryService;
 use Tests\Mocks\RedisMock;
 
 beforeEach(function () {
+    // 遥测与系统日志都依赖 Redis；本机默认 Config.inc.php 会关闭缓存，
+    // 直接依赖全局连接会让这组用例在本地必然失败。统一注入 RedisMock，
+    // 保证测试结果与是否装了 redis-server 无关。
     RedisMock::reset();
+    \App\Client\RedisClient::setTestConnection(new RedisMock());
+
     SystemLogManager::clearLogs();
     TelemetryService::clearStats();
+});
+
+afterEach(function () {
+    \App\Client\RedisClient::setTestConnection(null);
 });
 
 test('Syslog writes structured log to Redis and file', function () {

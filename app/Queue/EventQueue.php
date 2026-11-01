@@ -85,6 +85,29 @@ final class EventQueue
      * @param EventHandlerInterface|callable|string $handler 处理器实例、可调用对象或类名
      * @param int $priority 优先级（数值越大越优先执行）
      */
+    /**
+     * 判断注册的处理器是否指向某个类（支持类名字符串、实例与可调用数组）。
+     *
+     * @param EventHandlerInterface|callable|string $handler
+     * @param class-string $class
+     */
+    private static function handlerIs(EventHandlerInterface|callable|string $handler, string $class): bool
+    {
+        if (is_string($handler)) {
+            return is_a($handler, $class, true);
+        }
+        if (is_object($handler)) {
+            return $handler instanceof $class;
+        }
+        // callable 数组 [$objectOrClass, 'method']：按类部分判断
+        if (!is_array($handler)) {
+            return false;
+        }
+        return is_string($handler[0])
+            ? is_a($handler[0], $class, true)
+            : $handler[0] instanceof $class;
+    }
+
     public static function register(string $eventName, EventHandlerInterface|callable|string $handler, int $priority = 0): void
     {
         if (!isset(self::$listeners[$eventName])) {
@@ -142,7 +165,7 @@ final class EventQueue
      *
      * @param string $event 事件名称
      * @param array<string, mixed> $payload 事件数据
-     * @param array{dedupKey?: string, maxAttempts?: int} $options 派发选项
+     * @param array{maxAttempts?: int} $options 派发选项
      * @return bool 派发是否成功接收
      */
     public static function dispatch(string $event, array $payload, array $options = []): bool
@@ -225,10 +248,10 @@ final class EventQueue
 
             // 动态根据开关跳过对应处理器
             if ($eventName === self::EVENT_LOG_UPLOADED) {
-                if (!$cfg['asyncSecurityAudit'] && (is_a($handler, SecurityAuditHandler::class, true) || $handler instanceof SecurityAuditHandler)) {
+                if (!$cfg['asyncSecurityAudit'] && self::handlerIs($handler, SecurityAuditHandler::class)) {
                     continue;
                 }
-                if (!$cfg['asyncDeobfuscate'] && (is_a($handler, DeobfuscateHandler::class, true) || $handler instanceof DeobfuscateHandler)) {
+                if (!$cfg['asyncDeobfuscate'] && self::handlerIs($handler, DeobfuscateHandler::class)) {
                     continue;
                 }
             }

@@ -13,6 +13,7 @@ class FiltersController extends AbstractController
      * 进程级缓存：过滤器清单由配置推导且配置加载后不变，
      * 与全局配置语义一致（变更需重启生效）。
      */
+    /** @var array<int, array<string, mixed>>|null */
     private static ?array $cachedFilters = null;
 
     /**
@@ -32,6 +33,9 @@ class FiltersController extends AbstractController
         ]);
     }
 
+    /**
+     * @return array<int, array<string, mixed>>
+     */
     private static function buildFilterList(): array
     {
         $preFilters = \App\Config::Get('filter')['pre'] ?? [];

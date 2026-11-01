@@ -12,7 +12,7 @@ beforeEach(function () {
     $cfg = $this->origData;
     $cfg['admin'] = [
         'enabled' => true,
-        'token' => 'test-admin-secret-token',
+        'token' => 'test-admin-secret-token-0123456789abcdef',
     ];
     $cfg['cache']['redis']['password'] = 'redis-secret-password';
     $cfg['storage']['mariadb']['password'] = 'mariadb-secret-password';
@@ -62,7 +62,7 @@ test('Config saveDynamic updates non-sensitive settings and restores masked secr
 
     $current = Config::all();
     expect($current['storage']['storageTime'])->toBe(864000);
-    expect($current['admin']['token'])->toBe('test-admin-secret-token');
+    expect($current['admin']['token'])->toBe('test-admin-secret-token-0123456789abcdef');
     expect($current['cache']['redis']['password'])->toBe('redis-secret-password');
     expect($current['storage']['mariadb']['password'])->toBe('mariadb-secret-password');
     expect(is_file(Config::getDynamicConfigPath()))->toBeTrue();
