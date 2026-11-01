@@ -3,7 +3,6 @@
 declare(strict_types=1);
 
 use App\Config;
-use App\Controller\AdminController;
 use App\Controller\LogController;
 use App\Id;
 use App\Log;
@@ -262,29 +261,6 @@ test('LogController upload delegates audit and deobfuscation to EventQueue', fun
     $log = new Log($id);
     expect($log->exists())->toBeTrue()
         ->and($log->getSource())->toBe('HMCL/3.5.0');
-});
-
-test('AdminController event queue endpoints provide stats and management', function () {
-    $mockReq = Mockery::mock(\Hyperf\HttpServer\Contract\RequestInterface::class);
-    $mockReq->shouldReceive('getServerParams')->andReturn(['remote_addr' => '127.0.0.1']);
-    $mockReq->shouldReceive('getHeaders')->andReturn([]);
-    $mockReq->shouldReceive('getQueryParams')->andReturn(['limit' => 10]);
-
-    $ref = new ReflectionClass(AdminController::class);
-    /** @var AdminController $controller */
-    $controller = $ref->newInstanceWithoutConstructor();
-    $ref->getProperty('request')->setValue($controller, $mockReq);
-
-    $statsRes = $controller->getEventQueueStats();
-    expect($statsRes->getStatusCode())->toBe(200);
-    $statsData = json_decode((string) $statsRes->getBody(), true);
-    expect($statsData['success'])->toBeTrue()
-        ->and($statsData['stream'])->toBe('events:log:stream');
-
-    $deadRes = $controller->getDeadLetters();
-    expect($deadRes->getStatusCode())->toBe(200);
-    $deadData = json_decode((string) $deadRes->getBody(), true);
-    expect($deadData['success'])->toBeTrue();
 });
 
 test('executePipeline counts blocked events separately from failed events', function () {

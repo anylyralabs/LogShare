@@ -13,7 +13,6 @@ return [
     'storage' => [
         'storages' => [
             's' => ['name' => 'MariaDB',     'class' => '\\App\\Storage\\MariaDbStorage',      'enabled' => true],
-            'f' => ['name' => 'Filesystem',  'class' => '\\App\\Storage\\FilesystemStorage',  'enabled' => false],
         ],
         'storageId' => 's',
         // 日志保留时长（秒）。MariaDB 后端按 created 的天级 RANGE 分区存储，
@@ -69,9 +68,6 @@ return [
     'urls' => [
         'baseUrl' => 'https://logshare.cn',
         'apiBaseUrl' => 'https://api.logshare.cn',
-        // 管理端 CORS 白名单（必须精确匹配 Origin）。留空则管理端不下发
-        // Access-Control-Allow-Origin，仅同源页面可用。
-        'corsOrigins' => ['https://logshare.cn'],
     ],
 
     /* ─── Rate limit（Redis INCR 限流，按 IP + method + path）── */
@@ -129,17 +125,6 @@ return [
         'cache_max_entries' => 10,
         'cache_high_watermark' => 10,
         'cache_low_watermark' => 7,
-    ],
-
-    /* ─── 管理后台接口（Admin API）────────────────────────── */
-    'admin' => [
-        // 是否启用 /v1/admin/* 管理端点，关闭时返回 404。
-        // 只有配置了足够强的 token 才能开启：占位串与短于 32 字符的 token 会被
-        // Config::validate() 拒绝，避免仓库里的示例值直接成为线上口令。
-        'enabled' => false,
-        // 管理员鉴权 Token，请求时通过 Authorization: Bearer <token> 或 X-Admin-Token 传入
-        // 可由环境变量 ADMIN_TOKEN 覆盖；生成方式：openssl rand -hex 32
-        'token' => '',
     ],
 
     /* ─── 统一事件队列（EventQueue）────────────────────────── */

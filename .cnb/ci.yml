@@ -99,8 +99,6 @@
       DB_PASSWORD=logshare
       REDIS_HOST=redis
       REDIS_PORT=6379
-      ADMIN_ENABLED=true
-      ADMIN_TOKEN=ci-test-token-0123456789abcdef
       ENVEOF
 
   - name: composer 校验与代码风格
@@ -209,7 +207,7 @@
           if [ "$ready" != "1" ]; then
             echo "=== 服务启动超时 ==="; cat /tmp/hyperf.log; exit 1
           fi
-          php scripts/ci_e2e_test.php --base-url=http://127.0.0.1:9501 --admin-token=ci-test-token-0123456789abcdef || {
+          php scripts/ci_e2e_test.php --base-url=http://127.0.0.1:9501 || {
             echo "=== hyperf.log ==="; cat /tmp/hyperf.log; exit 1
           }
         '

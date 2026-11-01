@@ -2,7 +2,6 @@
 
 use App\ApiError;
 use App\Config;
-use App\Controller\AdminController;
 use App\Controller\LogController;
 use App\System\SecurityService;
 use Hyperf\HttpMessage\Server\Request;
@@ -17,10 +16,6 @@ beforeEach(function () {
     mkdir($this->tmpDir, 0777, true);
 
     $cfg = $this->origData;
-    $cfg['admin'] = [
-        'enabled' => true,
-        'token' => 'test-admin-secret-token-0123456789abcdef',
-    ];
     $cfg['filesystem']['path'] = substr($this->tmpDir, strlen(CORE_PATH)) . '/';
     $cfg['storage']['storageId'] = 'f';
     $cfg['storage']['storages']['f']['enabled'] = true;
@@ -131,49 +126,6 @@ test('SecurityService content rules validation and rejection', function () {
     // 匹配正则抛出 ApiError
     expect(fn() => SecurityService::validateContent('Detected signature trojan_v2'))
         ->toThrow(ApiError::class);
-});
-
-test('AdminController security endpoints respond properly', function () {
-    $controller = new AdminController();
-    $psr7Req = new Request('GET', '/v1/admin/security/overview');
-    \Hyperf\Context\Context::set(\Psr\Http\Message\ServerRequestInterface::class, $psr7Req);
-    $reqRef = new ReflectionProperty($controller, 'request');
-    $reqRef->setValue($controller, new \Hyperf\HttpServer\Request());
-
-    $overviewResp = $controller->getSecurityOverview();
-    expect($overviewResp->getStatusCode())->toBe(200);
-    $overviewBody = json_decode((string) $overviewResp->getBody(), true);
-    expect($overviewBody['success'])->toBeTrue();
-    expect($overviewBody)->toHaveKey('categories');
-
-    // 封禁测试
-    $banReq = (new Request('POST', '/v1/admin/security/ban'))->withParsedBody([
-        'ip' => '203.0.113.88',
-        'ttl' => 600,
-        'reason' => 'Admin test ban',
-    ]);
-    \Hyperf\Context\Context::set(\Psr\Http\Message\ServerRequestInterface::class, $banReq);
-    $banResp = $controller->banIp();
-    expect($banResp->getStatusCode())->toBe(200);
-
-    // 查列表
-    $listReq = new Request('GET', '/v1/admin/security/bans');
-    \Hyperf\Context\Context::set(\Psr\Http\Message\ServerRequestInterface::class, $listReq);
-    $listResp = $controller->getSecurityBans();
-    $listBody = json_decode((string) $listResp->getBody(), true);
-    expect($listBody['success'])->toBeTrue();
-    expect($listBody['total'])->toBeGreaterThanOrEqual(1);
-
-    // 解封
-    putenv('OPENLITEWAF_ADMIN_TOKEN');
-    $unbanReq = (new Request('POST', '/v1/admin/security/unban'))->withParsedBody(['ip' => '203.0.113.88']);
-    \Hyperf\Context\Context::set(\Psr\Http\Message\ServerRequestInterface::class, $unbanReq);
-    $unbanResp = $controller->unbanIp();
-    expect($unbanResp->getStatusCode())->toBe(200);
-    // 边缘同步结果必须回传：未配置令牌时是 skipped（应用层已解封，WAF 仍会在 TTL 内 403），
-    // 控制台据此区分提示，不能一律显示"已成功解封"
-    $unbanBody = json_decode((string) $unbanResp->getBody(), true);
-    expect($unbanBody['waf_sync'] ?? null)->toBe('skipped');
 });
 
 test('SecurityService resolveClientIp handles trusted reverse proxies and prevents spoofing', function () {

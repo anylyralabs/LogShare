@@ -2,7 +2,6 @@
 
 use App\ApiError;
 use App\Config;
-use App\Controller\AdminController;
 use App\System\AuditLogManager;
 use App\System\SpinYarnManager;
 use Hyperf\HttpMessage\Server\Request;
@@ -14,10 +13,6 @@ beforeEach(function () {
     $this->origData = $this->dataProp->getValue();
 
     $cfg = $this->origData;
-    $cfg['admin'] = [
-        'enabled' => true,
-        'token' => 'test-admin-secret-token-0123456789abcdef',
-    ];
     $this->dataProp->setValue(null, $cfg);
 
     if (!\Hyperf\Context\ApplicationContext::hasContainer()) {
@@ -43,16 +38,6 @@ afterEach(function () {
     AuditLogManager::clearLogs();
     $this->dataProp->setValue(null, $this->origData);
 });
-
-function createMockAdminRequest(string $method = 'GET', string $uri = '/v1/admin/test', array $queryParams = [], ?array $parsedBody = null): Request
-{
-    $req = new Request($method, $uri);
-    $req = $req->withQueryParams($queryParams);
-    if ($parsedBody !== null) {
-        $req = $req->withParsedBody($parsedBody);
-    }
-    return $req;
-}
 
 test('SpinYarnManager getStatus returns structured info', function () {
     $status = SpinYarnManager::getStatus();
@@ -101,71 +86,4 @@ test('AuditLogManager records and retrieves logs with filters and pagination', f
     expect($cleared)->toBeGreaterThanOrEqual(3);
     $afterClear = AuditLogManager::getLogs(1, 10);
     expect($afterClear['total'])->toBe(0);
-});
-
-test('AdminController handles spinyarn endpoints', function () {
-    $controller = new AdminController();
-    $reqRef = new ReflectionProperty($controller, 'request');
-    $reqRef->setValue($controller, new \Hyperf\HttpServer\Request());
-
-    // 1. GET spinyarn/status
-    \Hyperf\Context\Context::set(\Psr\Http\Message\ServerRequestInterface::class, createMockAdminRequest('GET', '/v1/admin/spinyarn/status'));
-    $resp = $controller->getSpinYarnStatus();
-    expect($resp->getStatusCode())->toBe(200);
-    $body = json_decode((string) $resp->getBody(), true);
-    expect($body['success'])->toBeTrue();
-    expect($body)->toHaveKey('totalYarnCount');
-
-    // 2. POST spinyarn/test validation
-    \Hyperf\Context\Context::set(\Psr\Http\Message\ServerRequestInterface::class, createMockAdminRequest('POST', '/v1/admin/spinyarn/test', [], ['content' => '']));
-    try {
-        $controller->testSpinYarnDeobfuscate();
-        test()->fail('Expected ApiError was not thrown');
-    } catch (ApiError $e) {
-        expect($e->getCode())->toBe(400);
-        expect($e->getMessage())->toContain('Both content and version are required');
-    }
-
-    // 3. POST spinyarn/test valid payload
-    \Hyperf\Context\Context::set(\Psr\Http\Message\ServerRequestInterface::class, createMockAdminRequest('POST', '/v1/admin/spinyarn/test', [], [
-        'content' => 'java.lang.Crash',
-        'version' => '1.20.1',
-        'mapping_type' => 'yarn',
-    ]));
-    $respTest = $controller->testSpinYarnDeobfuscate();
-    expect($respTest->getStatusCode())->toBe(200);
-    $bodyTest = json_decode((string) $respTest->getBody(), true);
-    expect($bodyTest['success'])->toBeTrue();
-    expect($bodyTest['data'])->toHaveKey('original');
-});
-
-test('AdminController handles audit endpoints', function () {
-    AuditLogManager::record('test.action', 'target-1', ['foo' => 'bar']);
-
-    $controller = new AdminController();
-    $reqRef = new ReflectionProperty($controller, 'request');
-    $reqRef->setValue($controller, new \Hyperf\HttpServer\Request());
-
-    // 1. GET audit/logs
-    \Hyperf\Context\Context::set(\Psr\Http\Message\ServerRequestInterface::class, createMockAdminRequest('GET', '/v1/admin/audit/logs', ['keyword' => 'target-1']));
-    $resp = $controller->getAuditLogs();
-    expect($resp->getStatusCode())->toBe(200);
-    $body = json_decode((string) $resp->getBody(), true);
-    expect($body['success'])->toBeTrue();
-    expect($body['total'])->toBe(1);
-    expect($body['items'][0]['target'])->toBe('target-1');
-
-    // 2. DELETE audit/logs
-    \Hyperf\Context\Context::set(\Psr\Http\Message\ServerRequestInterface::class, createMockAdminRequest('DELETE', '/v1/admin/audit/logs'));
-    $respDel = $controller->clearAuditLogs();
-    expect($respDel->getStatusCode())->toBe(200);
-    $bodyDel = json_decode((string) $respDel->getBody(), true);
-    expect($bodyDel['success'])->toBeTrue();
-    expect($bodyDel['cleared'])->toBeGreaterThanOrEqual(1);
-
-    // 验证已清空
-    \Hyperf\Context\Context::set(\Psr\Http\Message\ServerRequestInterface::class, createMockAdminRequest('GET', '/v1/admin/audit/logs'));
-    $respAfter = $controller->getAuditLogs();
-    $bodyAfter = json_decode((string) $respAfter->getBody(), true);
-    expect($bodyAfter['total'])->toBe(0);
 });

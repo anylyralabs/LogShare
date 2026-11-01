@@ -4,9 +4,6 @@ namespace App;
 
 class Config
 {
-    /** admin.token 允许启用的最小长度 */
-    public const MIN_ADMIN_TOKEN_LENGTH = 32;
-
     /** @var array<string, mixed> */
     private static array $data = [];
     private static bool $loaded = false;
@@ -104,13 +101,6 @@ class Config
         if (($password = getenv('REDIS_PASSWORD')) !== false && $password !== '') {
             $data['cache']['redis']['password'] = $password;
         }
-        if (($adminEnabled = getenv('ADMIN_ENABLED')) !== false) {
-            $data['admin']['enabled'] = in_array(strtolower($adminEnabled), ['1', 'true', 'on', 'yes'], true);
-        }
-        if ($adminToken = getenv('ADMIN_TOKEN')) {
-            $data['admin']['token'] = $adminToken;
-        }
-
     }
 
     /**
@@ -128,24 +118,6 @@ class Config
         $redis = $cache['redis'] ?? [];
         if (($redis['host'] ?? '') === '' || (int) ($redis['port'] ?? 0) <= 0) {
             throw new \InvalidArgumentException('cache.redis host and port are required');
-        }
-
-        $admin = $data['admin'] ?? [];
-        if (($admin['enabled'] ?? false) === true) {
-            $token = $admin['token'] ?? null;
-            if (!is_string($token) || $token === '') {
-                throw new \InvalidArgumentException('admin.token is required when admin is enabled');
-            }
-            if (self::isPlaceholderSecret($token)) {
-                throw new \InvalidArgumentException(
-                    'admin.token still uses a placeholder from the example config; set ADMIN_TOKEN to a random value (openssl rand -hex 32)'
-                );
-            }
-            if (strlen($token) < self::MIN_ADMIN_TOKEN_LENGTH) {
-                throw new \InvalidArgumentException(
-                    'admin.token must be at least ' . self::MIN_ADMIN_TOKEN_LENGTH . ' characters long'
-                );
-            }
         }
 
         $security = $data['security'] ?? [];
@@ -272,9 +244,8 @@ class Config
     /**
      * 读取一个顶层配置段。
      *
-     * 只接受段名（如 `admin`、`storage`）。传入 `admin.token` 这类点路径
-     * 会静默返回空数组，曾让运维脚本把空值当成有效 token 继续发请求；
-     * 这里直接抛错，把误用暴露在开发阶段。
+     * 只接受段名（如 `storage`、`security`）。传入 `storage.storageTime`
+     * 这类点路径会静默返回空数组，这里直接抛错，把误用暴露在开发阶段。
      */
     /**
      * @return array<string, mixed>
@@ -283,7 +254,7 @@ class Config
     {
         if (str_contains($name, '.')) {
             throw new \InvalidArgumentException(
-                "Config::Get() expects a top-level section name, got '{$name}'. Use Config::Get('admin')['token'] instead."
+                "Config::Get() expects a top-level section name, got '{$name}'. Use Config::GetPath('a.b') for nested values."
             );
         }
 
@@ -434,7 +405,6 @@ class Config
     {
         // Scalar secret fields
         $secretFields = [
-            ['admin', 'token'],
             ['cache', 'redis', 'password'],
             ['storage', 'mariadb', 'password'],
         ];
@@ -470,9 +440,6 @@ class Config
         $masked = self::$data;
         unset($masked['_meta']);
 
-        if (isset($masked['admin']['token']) && (string) $masked['admin']['token'] !== '') {
-            $masked['admin']['token'] = '******';
-        }
         if (isset($masked['cache']['redis']['password']) && (string) $masked['cache']['redis']['password'] !== '') {
             $masked['cache']['redis']['password'] = '******';
         }

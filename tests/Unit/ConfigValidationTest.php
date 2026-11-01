@@ -30,36 +30,15 @@ function loadConfigArray(array $overrides): void
     }
 }
 
-test('example config keeps admin disabled with an empty token', function () {
-    $example = require CORE_PATH . '/Config.inc.example.php';
-
-    expect($example['admin']['enabled'])->toBeFalse();
-    expect($example['admin']['token'])->toBe('');
-});
-
-test('placeholder admin token is rejected when admin is enabled', function () {
-    loadConfigArray(['admin' => ['enabled' => true, 'token' => 'change-this-to-a-secure-random-token']]);
-})->throws(InvalidArgumentException::class, 'placeholder');
-
-test('short admin token is rejected', function () {
-    loadConfigArray(['admin' => ['enabled' => true, 'token' => 'short-token']]);
-})->throws(InvalidArgumentException::class, 'at least 32');
-
-test('strong admin token is accepted', function () {
-    loadConfigArray(['admin' => ['enabled' => true, 'token' => str_repeat('a', 40)]]);
-
-    expect(Config::Get('admin')['enabled'])->toBeTrue();
-});
-
 test('Config::Get rejects dotted paths', function () {
-    expect(fn() => Config::Get('admin.token'))->toThrow(InvalidArgumentException::class);
+    expect(fn() => Config::Get('storage.storageTime'))->toThrow(InvalidArgumentException::class);
 });
 
 test('Config::GetPath reads nested values', function () {
     loadConfigArray([]);
 
-    expect(Config::GetPath('admin.enabled'))->toBeFalse();
-    expect(Config::GetPath('admin.missing', 'fallback'))->toBe('fallback');
+    expect(Config::GetPath('storage.storageTime'))->toBeInt();
+    expect(Config::GetPath('storage.missing', 'fallback'))->toBe('fallback');
 });
 
 test('unknown filter class is rejected', function () {

@@ -336,7 +336,7 @@ final class EventQueue
     }
 
     /**
-     * 获取队列运行统计与指标（提供给 Admin API 与监控）。
+     * 获取队列运行统计与指标（供监控使用）。
      *
      * @return array<string, mixed>
      */

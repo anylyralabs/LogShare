@@ -2,7 +2,7 @@
 # 阶段 1：编译 SpinYarn C ABI 库
 # rust ≥1.88：SpinYarn 依赖链（url→idna→icu 2.x）的 MSRV 要求
 # 源码走 CNB 主仓（MornZe-Dev/SpinYarn），Redis JSON 共享缓存 + 按需回退 +
-# 管理端点鉴权（ADMIN_TOKEN），PHP 侧 5 参反射适配，建不起缓存回退按需模式
+# PHP 侧 5 参反射适配，建不起缓存回退按需模式
 FROM rust:1.90.0 AS spinyarn-capi
 # SpinYarn 源码 pin 到 commit（2026-10-12 的 main，经 CNB 流水线 CI），防分支漂移
 ARG SPINYARN_REF=87e56039a9961b7b06b4d21f98325d70afa45d7e

@@ -18,38 +18,15 @@ class CorsMiddleware implements MiddlewareInterface
 {
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
-        $isAdmin = $this->isAdminRequest($request);
-
         if ($request->getMethod() === 'OPTIONS') {
-            return $this->withCorsHeaders(new Response(), $request, $isAdmin);
+            return $this->withCorsHeaders(new Response(), $request);
         }
 
-        return $this->withCorsHeaders($handler->handle($request), $request, $isAdmin);
+        return $this->withCorsHeaders($handler->handle($request), $request);
     }
 
-    private function isAdminRequest(ServerRequestInterface $request): bool
+    private function withCorsHeaders(ResponseInterface $response, ServerRequestInterface $request): ResponseInterface
     {
-        $path = $request->getUri()->getPath();
-        return (bool) preg_match('#^/(?:v?1)/admin(/|$)#', $path);
-    }
-
-    private function withCorsHeaders(ResponseInterface $response, ServerRequestInterface $request, bool $isAdmin): ResponseInterface
-    {
-        if ($isAdmin) {
-            // 管理端用 Bearer token：只回显配置里声明的来源，绝不使用通配符，
-            // 否则任何页面都能带着已泄露的 token 发起跨站读请求。
-            $allowed = (array) (\App\Config::Get('urls')['corsOrigins'] ?? []);
-            $origin = $request->getHeaderLine('Origin');
-            $allow = in_array($origin, $allowed, true) ? $origin : (string) ($allowed[0] ?? '');
-
-            return $response
-                ->withHeader('Access-Control-Allow-Origin', $allow)
-                ->withHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Admin-Token')
-                ->withHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
-                ->withHeader('Access-Control-Max-Age', '600')
-                ->withHeader('Vary', 'Origin');
-        }
-
         return $response
             ->withHeader('Access-Control-Allow-Origin', '*')
             ->withHeader('Access-Control-Allow-Headers', '*')

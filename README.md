@@ -44,7 +44,6 @@ php scripts/widen_token_column.php
 | `eventQueue` | 统一日志事件队列：Redis Stream 键名与消费组、最大重试次数、异步反混淆与异步安全审核开关 |
 | `rateLimit` | 应用层限流（limit / window，Redis INCR 实现） |
 | `spinyarn` | 反混淆扩展：映射目录与缓存水位 |
-| `admin` | 管理后台开关与安全 Token（`/{version}/admin/*` 控制台鉴权） |
 | `urls` | 前端与 API 的基础 URL |
 
 ## Docker 部署
@@ -118,7 +117,6 @@ POST   /v1/telemetry/report                      上报客户端与启动器遥�
 GET    /1/limits | /v1/limits                    获取上传限制与存储 TTL
 GET    /1/errors/rate | /v1/errors/rate          限流错误测试端点（始终返回 429）
 GET    /1/filters | /v1/filters                  获取当前启用的过滤器列表
-/*     /v1/admin/*                               管理后台控制台（需 Admin Token）
 ```
 
 上传接口接受 `application/x-www-form-urlencoded` 与 `application/json`，支持 gzip / deflate / brotli 压缩请求体；`files` 数组可附加多个文件，`.zip` 压缩包自动展开并保留内部相对路径，展开后每个文件独立经过脱敏过滤链。客户端接入时建议同时上传「游戏主日志 + 崩溃报告 + 启动器日志」并注明 `source` 来源标识。上传响应中的 `token` 是删除该日志的唯一凭证；命中内容去重时响应会带 `deduplicated: true`，此时返回的 `token` 未写入存储、不能用于删除，请使用首次上传保存的凭证。Codex 结构化解析结果通过 `/v1/insights/{id}` 返回；AI 智能诊断由外部服务提供，本仓库不再暴露 `/v1/ai/*` 端点。
@@ -133,10 +131,10 @@ core.php                  引导文件（定义 CORE_PATH 并加载 Config）
 app/                      核心类库（App\ 命名空间）
 ├── Cache/                Redis 缓存实现与协程连接池
 ├── Client/               Redis、SpinYarn 客户端
-├── Controller/           HTTP 控制器（注解路由，含 Log、Admin 控制台等）
+├── Controller/           HTTP 控制器（注解路由）
 ├── Data/                 数据模型（Token、MetadataEntry）
 ├── Filter/               预处理过滤链（敏感信息脱敏）
-├── Middleware/           CORS、AdminAuth、限流中间件
+├── Middleware/           CORS 与限流中间件
 ├── Parser/               请求体解码（Brotli / Gzip / Deflate 自动解压与炸弹防护）
 ├── Process/              常驻事件消费者进程（EventQueueConsumer）
 ├── Queue/                统一日志异步事件队列（EventQueue、QueueEvent、DeadLetterQueue、Handler/）
@@ -157,7 +155,7 @@ OpenLiteWaf/              边缘 WAF 独立子模块（OpenResty Lua，CC 防御
 OpenLiteStats/            边缘站点访问统计独立子模块（无锁位图 UV、流量统计与日志分析）
 Config.inc.php            全部配置（gitignored）
 Config.inc.example.php    配置模板
-.env.example              环境变量模板（数据库、Redis、Admin 秘钥覆盖）
+.env.example              环境变量模板（数据库、Redis 覆盖）
 AGENTS.md                 项目核心架构约定与上下文文档
 API.md                    完整 API 文档
 CHANGELOG.md              更新日志

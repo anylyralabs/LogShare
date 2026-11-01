@@ -6,12 +6,11 @@ declare(strict_types=1);
  * LogShare 端到端真实环境冒烟与全链路集成测试脚本。
  *
  * 用法：
- *   php scripts/ci_e2e_test.php --base-url=http://127.0.0.1:9501 [--admin-token=xxx] [--waf-test]
+ *   php scripts/ci_e2e_test.php --base-url=http://127.0.0.1:9501 [--waf-test]
  */
 
-$options = getopt('', ['base-url:', 'admin-token::', 'waf-test::']);
+$options = getopt('', ['base-url:', 'waf-test::']);
 $baseUrl = rtrim(is_string($options['base-url'] ?? null) ? $options['base-url'] : 'http://127.0.0.1:9501', '/');
-$adminToken = is_string($options['admin-token'] ?? null) ? $options['admin-token'] : 'test-admin-secret-token';
 $testWaf = isset($options['waf-test']);
 
 echo "=== 开始 LogShare 真实环境端到端测试 ===\n";
@@ -286,52 +285,6 @@ runCheck('DELETE /v1/log/{id} 鉴权拦截与有效 Token 成功删除', functio
     }
 });
 
-// ── 3. Admin 管理接口验证 ──
-
-runCheck('GET /v1/admin/logs 需授权拦截与授权访问', function () use ($baseUrl, $adminToken) {
-    // 1. 无授权拦截
-    $unauth = httpRequest('GET', "{$baseUrl}/v1/admin/logs");
-    if ($unauth['status'] !== 401 && $unauth['status'] !== 403) {
-        throw new RuntimeException("管理接口未授权访问未被拦截，状态: {$unauth['status']}");
-    }
-
-    // 2. 携带 Token 授权访问
-    $auth = httpRequest('GET', "{$baseUrl}/v1/admin/logs?page=1&limit=10", [
-        'Authorization' => "Bearer {$adminToken}",
-    ]);
-    // 若 admin 未启用则为 403，若启用则为 200
-    if ($auth['status'] === 200) {
-        $json = json_decode($auth['body'], true);
-        if (empty($json['success']) || !isset($json['items'])) {
-            throw new RuntimeException("管理端日志列表响应不合法: {$auth['body']}");
-        }
-    }
-});
-
-runCheck('GET /v1/admin/system/stats 与 storage-health 系统状态检查', function () use ($baseUrl, $adminToken) {
-    $stats = httpRequest('GET', "{$baseUrl}/v1/admin/system/stats", [
-        'Authorization' => "Bearer {$adminToken}",
-    ]);
-    if ($stats['status'] === 200) {
-        $json = json_decode($stats['body'], true);
-        $hasVersion = isset($json['version']) || isset($json['data']['version']);
-        if (empty($json['success']) || !$hasVersion) {
-            throw new RuntimeException("系统统计数据不合法: {$stats['body']}");
-        }
-    }
-
-    $health = httpRequest('GET', "{$baseUrl}/v1/admin/system/storage-health", [
-        'Authorization' => "Bearer {$adminToken}",
-    ]);
-    if ($health['status'] === 200) {
-        $json = json_decode($health['body'], true);
-        $hasBackend = isset($json['storageBackend']) || isset($json['data']['storageBackend']);
-        if (empty($json['success']) || !$hasBackend) {
-            throw new RuntimeException("存储健康度数据不合法: {$health['body']}");
-        }
-    }
-});
-
 // ── 4. WAF 与边缘安全网关测试（若开启 --waf-test） ──
 
 if ($testWaf) {
@@ -382,21 +335,6 @@ if ($testWaf) {
         $res = httpRequest('POST', "{$baseUrl}/v1/telemetry/report", ['Content-Type' => 'application/json'], $payload);
         if ($res['status'] === 403 || $res['status'] === 429) {
             throw new RuntimeException("OpenLiteWaf 误拦截遥测上报，状态: {$res['status']}");
-        }
-    });
-
-    runCheck('OpenLiteWaf 管理端请求体放行（含反引号与 curl 的正常书写）', function () use ($baseUrl, $adminToken) {
-        // 用只读路由发 POST：断言的是边缘层不拦，不关心应用层返回什么（405/404 均可）
-        $payload = (string) json_encode([
-            'content' => "# 排障速查\n执行 `whoami` 或 curl https://piston-meta.mojang.com/xxx 下载失败，"
-                . "读 ../../config.yml 报 java.lang.IllegalStateException，检查 /etc/hosts 与 Thread.sleep(Native Method)\n",
-        ]);
-        $res = httpRequest('POST', "{$baseUrl}/v1/admin/logs", [
-            'Content-Type' => 'application/json',
-            'Authorization' => "Bearer {$adminToken}",
-        ], $payload);
-        if ($res['status'] === 403 || $res['status'] === 429) {
-            throw new RuntimeException("OpenLiteWaf 误拦截管理端请求体，状态: {$res['status']}");
         }
     });
 

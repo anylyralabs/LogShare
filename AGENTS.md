@@ -34,8 +34,7 @@ php vendor/bin/pest --filter=TestName
 ## 请求链路
 
 - 上传：`POST /v1/log` → `RequestParser` 解压 → `UploadParser` 校验 / ZIP 展开（同名条目自动改名为 `name (2)`）→ `Log::put()` 内的 `preFilter` + **仅头部** Codex 解析（64KB，取版本/加载器）+ 存储 → `EventQueue::dispatch(EVENT_LOG_UPLOADED)` → 立即 200。全文分析留给 `/v1/insights` 按需执行。耗时安全审核与 SpinYarn 反混淆在 `EventQueueConsumer` 异步执行。
-- 读取：`GET /v1/raw/{id}[/{filename}]` → Redis 缓存 → 存储回源并续期。`DELETE /v1/log/{id}` 校验 Bearer 删除 token：库里只存 `sha256:<hex>`，`Token::fromHash()` 永远只比较哈希，**存储值本身不能当凭证**（历史缺陷已修）。读路径不做分区 DDL，过期回收只走事件与 Admin 端点。
-- 管理端：`/{version}/admin/*` 由 `AdminController` 集中承载，鉴权见下。
+- 读取：`GET /v1/raw/{id}[/{filename}]` → Redis 缓存 → 存储回源并续期。`DELETE /v1/log/{id}` 校验 Bearer 删除 token：库里只存 `sha256:<hex>`，`Token::fromHash()` 永远只比较哈希，**存储值本身不能当凭证**（历史缺陷已修）。读路径不做分区 DDL，过期回收只走事件与存储层清理入口。
 
 ## 存储 / ID
 
@@ -46,17 +45,14 @@ php vendor/bin/pest --filter=TestName
 - `logs.token` 存 `sha256:<hex>`（71 字符），列宽为 `VARCHAR(80)`；旧库升级需执行 `php scripts/widen_token_column.php`（幂等、只 ALTER，不清数据），否则上传会以 1406 失败。
 - 改 `storage.storageTime` 后必须 `php scripts/sync_mariadb_events.php` 并重启 `mariadb-events` 容器。旧库结构不兼容，迁移用 `php scripts/migrate_partitioned_storage.php --yes`：它会 DROP 三表并重建，现有日志全丢，执行前先确认已备份。
 - 上传去重按「正文 + 按名称排序的附件 + source」计算 `xxh128`，命中直接返回旧 ID；旧库缺 `fingerprint` 列时静默降级，不要阻断上传。
-- `GET /v1/admin/system/storage-health` 的 `fragmentationRatio` 在小数据量下天然偏高，看 `dataFreeBytes` 绝对值/趋势与 `largestFreePartition`。
 
 ## 控制器 / API
 
 - 控制器只用注入的 PSR-7 请求、`ContentParser`、Storage 抽象与 `AbstractController` 助手；禁止读 `$_SERVER` / `$_GET` / `$_POST`，禁止控制器内直接发 SQL（架构测试会挂）。
 - 所有控制器必须继承 `AbstractController`；新增 Filter / Storage / Cache 类必须实现对应接口，架构测试会校验命名空间与继承关系。
 - JSON / 结构化输入一律用 `$this->getParsedBody()`；它兼容 `text/plain` 等非 JSON Content-Type 的裸 JSON。预期业务失败抛 `App\ApiError`，由 `ApiExceptionHandler` 统一渲染。
-- 管理接口由 `admin.enabled` + `AdminAuthMiddleware`（timing-safe token）保护；管理端 CORS 只回显 `urls.corsOrigins` 白名单（公开端仍是 `*`），新增管理前端时先配白名单。示例配置的 `admin.token` 为空、`ADMIN_ENABLED` 默认 `false`；`Config::validate()` 拒绝占位串与短于 32 字符的 token，新增部署不会继承仓库里的口令。旧版 `ai` / `github` 配置段在 `Config::load()` 中丢弃，避免遗留密钥泄露。WAF 概览是 `SecurityService::getWafOverview()` 的白名单投影，新增字段必须同步，否则后台看不到；解封返回 `waf_sync`，不要笼统报“已解封”。
-- Admin 配置读取会对密钥打码；PUT 走 `Config::saveDynamic()`，它用 `restoreMaskedSecrets()` 回填 `******`，不要绕过它直接写动态配置。
+- 仓库不提供应用层管理接口；安全能力由上传前置过滤与异步审核承担。旧版 `ai` / `github` 配置段在 `Config::load()` 中丢弃，避免遗留密钥泄露。
 - 违规关键词 / 正则使用 AES-256-GCM 密文落盘（`enc:v1:...`），密钥来自 `SECURITY_ENCRYPTION_KEY` 或 `runtime/.security_secret`（0600）；不要改成明文存储，也不要吞掉解密失败异常。
-- `POST /v1/admin/system/cache/flush` 只接受 `StorageHealthService::FLUSHABLE_PREFIXES` 白名单，非法前缀返回 400；不要再加 `all`/`*` 的 `FLUSHDB` 快捷路径。
 - 公开遥测 `POST /v1/telemetry/report` 无鉴权：端点路径截断到 200 字符，单日端点键上限 2000（溢出归并 `:other`），`recordBatch()` 在 Redis 不可用时返回 0 而不是谎报已处理。
 - 内容去重命中时 `Log::put()` **不得**写缓存（`StorageInterface::Put()` 通过 `&$created` 告知是否新建），否则第二个上传者会拿到删除凭证；响应带 `deduplicated: true`。
 - `Config::Get()` 只接受顶层段名，点路径会抛异常（用 `Config::GetPath('a.b')`）；新鲜度检查按协程 Context 每请求一次，不要改回时间窗口。

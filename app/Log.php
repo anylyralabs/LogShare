@@ -631,7 +631,7 @@ class Log
 
         // 读路径绝不做分区维护：CleanupExpired() 会执行 ALTER TABLE ADD/DROP
         // PARTITION，需要元数据锁，可能阻塞同表上传并长时间占用连接池。
-        // 过期回收由 mariadb-events 定时事件与 Admin 手动端点负责。
+        // 过期回收由 mariadb-events 定时事件负责。
 
         if ($this->isCacheEnabled()) {
             try {
