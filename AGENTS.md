@@ -7,7 +7,7 @@
 - `bin/hyperf.php`：CLI 与服务入口；`core.php`：引导并加载 `Config.inc.php`；PSR-4 将 `App\` 映射到 `app/`。
 - HTTP 监听 `0.0.0.0:9501`（`config/autoload/server.php`）。控制器使用 Hyperf 注解路由，前缀 `/{version:v?1}` 同时匹配已弃用的 `/1` 与 `/v1`。
 - 存储后端固定为 MariaDB（`storage.storageId` = `s`）；日志 ID 首字符为存储标识。Redis 不是硬依赖，缺失时缓存降级、队列事件改为同步执行。
-- `OpenLiteWaf/`、`OpenLiteStats/` 是独立仓库的 git submodule（GitHub `anylyralabs/*`），有自己的测试与发布流程；改动需在各自仓库提交，再回主仓更新指针。
+- `OpenLiteWaf/`（当前 1.3.1）、`OpenLiteStats/`（当前 1.2.0）是独立仓库的 git submodule（GitHub `anylyralabs/*`），有自己的测试与发布流程；改动需在各自仓库提交，再回主仓更新指针。
 - 参考文档：`OpenLiteWaf/README.md`、`docs/`、`CHANGELOG.md`；`LOCAL_DEV_NOTES.md` 仅本地、被 `.git/info/exclude` 排除，永不提交。
 
 ## 开发命令
@@ -103,6 +103,8 @@ php vendor/bin/pest --filter=TestName
 - 覆盖率先 `--coverage-clover` 再用 `scripts/clover_to_lcov.php` 转 LCOV；`mariadb-events.sql` 含 `DELIMITER` 存储过程，只能由 mysql/mariadb 客户端导入。
 - 远端已迁移到 GitHub，`.github/workflows/` 直接触发；`scripts/ci_init_mariadb.sh` 刻意剔除 `CALL logshare_install_partitions()` 以匹配既有分区测试，改动前先读脚本注释。
 - 版本单一来源是 `app/Version.php`。发版时改 `CHANGELOG.md` 首条并同步 `README.md` / `openapi.yaml`，提交信息以 `[Build]` 开头；tag 与 Release notes 取自 CHANGELOG 首条。
+- 版本策略：后续无论改动大小，按用户要求每次仅递增一个修订号（patch），例如 `1.8.4 -> 1.8.5`；不要自行跳 minor/major，除非用户明确要求。
+- 发布包用 `git archive` 分别导出主仓与两个子模块后合并，确保 submodule 内容不会在归档中缺失；资产名 `LogShare-v<version>.tar.gz`，并附 `.sha256` 校验文件。
 - submodule 先在自身仓库提交推送，再回主仓更新指针（沿用 `chore: 更新 OpenLiteWaf submodule 指针（…）`）。
 
 ## 协作约定

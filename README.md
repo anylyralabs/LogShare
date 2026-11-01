@@ -48,7 +48,7 @@ php scripts/widen_token_column.php
 
 ## Docker 部署
 
-> 仓库以 submodule 引用边缘 WAF（`OpenLiteWaf/`，独立仓库 [anylyralabs/OpenLiteWaf](https://github.com/anylyralabs/OpenLiteWaf)，MIT）与站点统计（`OpenLiteStats/`，[anylyralabs/OpenLiteStats](https://github.com/anylyralabs/OpenLiteStats)，MIT）。clone 后先执行 `git submodule update --init --recursive`；已部署机器可 `git config submodule.recurse true` 让后续 `git pull` 自动跟随 submodule 更新。
+> 仓库以 submodule 引用边缘 WAF（`OpenLiteWaf/`，当前 1.3.1，独立仓库 [anylyralabs/OpenLiteWaf](https://github.com/anylyralabs/OpenLiteWaf)，MIT）与站点统计（`OpenLiteStats/`，当前 1.2.0，[anylyralabs/OpenLiteStats](https://github.com/anylyralabs/OpenLiteStats)，MIT）。clone 后先执行 `git submodule update --init --recursive`；已部署机器可 `git config submodule.recurse true` 让后续 `git pull` 自动跟随 submodule 更新。
 
 ```bash
 docker compose -f docker/compose.yaml up -d --build
@@ -100,6 +100,10 @@ location / {
     proxy_read_timeout 300s;
 }
 ```
+
+### 发布包
+
+GitHub Releases 提供 `LogShare-v<version>.tar.gz` 源码部署包，由 `git archive` 分别导出主仓与 `OpenLiteWaf` / `OpenLiteStats` 子模块后合并而成，并附带 `.sha256` 校验文件。部署包不包含 `vendor/`、`runtime/`、`Config.inc.php` 或 `.env`；这些仍在目标机器上生成或挂载。
 
 ## API
 

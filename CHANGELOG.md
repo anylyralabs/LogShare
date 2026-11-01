@@ -69,6 +69,7 @@
 ### 仓库与子模块
 
 - 主仓与两个子模块的远端迁移至 GitHub `anylyralabs`；`.gitmodules` 与子模块 origin 同步更新。
+- 当前子模块版本：`OpenLiteWaf` 1.3.1、`OpenLiteStats` 1.2.0。
 - `OpenLiteWaf` / `OpenLiteStats` 移除已下线 AI、telemetry、admin 端点的 body 豁免与统计排除项，测试临时目录从 Termux 路径统一到 `/tmp`。
 
 ### 保留
