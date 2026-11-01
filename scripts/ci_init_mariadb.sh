@@ -41,6 +41,11 @@ fi
 # 以 Config.inc.php 为 TTL 唯一来源重新生成 SQL
 php scripts/sync_mariadb_events.php
 
+# 单文件不设上限，20 MiB 总预算需要放宽 MariaDB 单包上限。
+# GitHub Actions 的 services.options 只能传 docker create 参数，不能直接改
+# mariadbd 启动参数，因此在初始化连接里设置全局值。
+"$CLI" -h "$DB_HOST" -uroot -p"$DB_ROOT_PASSWORD" -e "SET GLOBAL max_allowed_packet=67108864;"
+
 "$CLI" -h "$DB_HOST" -uroot -p"$DB_ROOT_PASSWORD" logshare < docker/mariadb-init.sql
 
 grep -v '^CALL logshare_install_partitions();' docker/mariadb-events.sql \
