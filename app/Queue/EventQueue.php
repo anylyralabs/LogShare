@@ -26,7 +26,6 @@ final class EventQueue
 
     public const DEFAULT_STREAM = 'events:log:stream';
     public const DEFAULT_GROUP = 'log-event-workers';
-    public const STATS_KEY = 'events:stats:counter';
 
     /**
      * 事件监听器注册表：[eventName => [[handler, priority], ...]]
@@ -189,7 +188,6 @@ final class EventQueue
 
                 // 近似保留最近 10000 条
                 RedisStreams::xAdd($streamKey, $streamData, 10000);
-                self::recordMetric('dispatched');
                 return true;
             } catch (\Throwable $e) {
                 \App\Syslog::error('EventQueue', 'Redis Stream dispatch failed, falling back: ' . $e->getMessage());
@@ -205,13 +203,11 @@ final class EventQueue
                     \App\Syslog::error('EventQueue', "Async event {$queueEvent->getName()} failed: " . $e->getMessage());
                 }
             });
-            self::recordMetric('dispatched_coroutine');
             return true;
         }
 
         // 3. 非协程环境（CLI/单测）同步降级执行
         $success = self::executePipeline($queueEvent);
-        self::recordMetric('dispatched_sync');
         return $success;
     }
 
@@ -270,13 +266,10 @@ final class EventQueue
         }
 
         if ($allSuccess) {
-            self::recordMetric('processed_success');
         } elseif ($event->isPropagationStopped()) {
             // 处理器主动阻断流转（异步安全审核命中违规，日志已物理删除并封禁）：
             // 事件按业务预期终结，计入拦截而非失败，否则失败率会被治理动作系统性抬高
-            self::recordMetric('processed_blocked');
         } else {
-            self::recordMetric('processed_failed');
         }
 
         return $allSuccess;
@@ -335,100 +328,5 @@ final class EventQueue
         return self::executePipeline($queueEvent);
     }
 
-    /**
-     * 获取队列运行统计与指标（供监控使用）。
-     *
-     * @return array<string, mixed>
-     */
-    public static function getStats(): array
-    {
-        $cfg = self::config();
-        $stream = $cfg['stream'];
-        $group = $cfg['group'];
 
-        $stats = [
-            'enabled' => $cfg['enabled'],
-            'stream' => $stream,
-            'group' => $group,
-            'maxAttempts' => $cfg['maxAttempts'],
-            'backlog' => 0,
-            'pending' => 0,
-            'streamLength' => 0,
-            'entriesRead' => 0,
-            'consumers' => 0,
-            'deadLetters' => DeadLetterQueue::count(),
-            'counters' => self::getMetrics(),
-            'registeredEvents' => self::getRegisteredEvents(),
-        ];
-
-        if (RedisClient::getRedis() !== null) {
-            try {
-                // 消费者处理完即 XACK + XDEL，streamLength 结构性恒为 0，
-                // 累计吞吐只能看消费组的 entries-read（Redis 7.0+，低版本无此字段时保持 0）
-                $stats['streamLength'] = RedisStreams::xLen($stream);
-                $groups = RedisStreams::xInfoGroups($stream);
-                foreach ($groups as $g) {
-                    if (($g['name'] ?? '') === $group) {
-                        $stats['pending'] = (int) ($g['pending'] ?? 0);
-                        $stats['backlog'] = (int) ($g['lag'] ?? 0) + $stats['pending'];
-                        $stats['entriesRead'] = (int) ($g['entries-read'] ?? 0);
-                        break;
-                    }
-                }
-                $stats['consumers'] = count(RedisStreams::xInfoConsumers($stream, $group));
-            } catch (\Throwable $e) {
-                // 尚无任何上传时流与消费组都不存在，属正常空态；其余异常必须落日志，
-                // 否则面板会长期把「检视失败」显示成「队列空闲」
-                if (!str_contains($e->getMessage(), 'no such key') && !str_contains($e->getMessage(), 'NOGROUP')) {
-                    \App\Syslog::error('EventQueue', 'getStats stream inspection failed: ' . $e->getMessage());
-                }
-            }
-        }
-
-        return $stats;
-    }
-
-    /**
-     * 记录统计计数指标。
-     */
-    private static function recordMetric(string $field): void
-    {
-        $redis = RedisClient::getRedis();
-        if ($redis === null) {
-            return;
-        }
-
-        try {
-            $redis->hIncrBy(self::STATS_KEY, $field, 1);
-        } catch (\Throwable) {
-        }
-    }
-
-    /**
-     * 获取全部统计计数。
-     *
-     * @return array<string, int>
-     */
-    public static function getMetrics(): array
-    {
-        $redis = RedisClient::getRedis();
-        if ($redis === null) {
-            return [];
-        }
-
-        try {
-            /** @var array<string, string>|false $data */
-            $data = $redis->hGetAll(self::STATS_KEY);
-            if (!is_array($data)) {
-                return [];
-            }
-            $out = [];
-            foreach ($data as $k => $v) {
-                $out[$k] = (int) $v;
-            }
-            return $out;
-        } catch (\Throwable) {
-            return [];
-        }
-    }
 }

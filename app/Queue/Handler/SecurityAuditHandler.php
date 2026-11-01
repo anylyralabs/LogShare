@@ -8,7 +8,6 @@ use App\ApiError;
 use App\Id;
 use App\Log;
 use App\Queue\QueueEvent;
-use App\System\AuditLogManager;
 use App\System\SecurityService;
 
 /**
@@ -69,18 +68,6 @@ class SecurityAuditHandler implements EventHandlerInterface
             $clientIp = isset($payload['clientIp']) && is_string($payload['clientIp']) ? trim($payload['clientIp']) : null;
 
             \App\Syslog::error('SecurityAudit', "Log {$logId} rejected by async security audit: {$violationReason}");
-
-            AuditLogManager::record(
-                'security.async_reject',
-                $logId,
-                [
-                    'reason' => $violationReason,
-                    'source' => $payload['source'] ?? null,
-                ],
-                false,
-                'event_worker',
-                $clientIp
-            );
 
             // 物理删除违规日志及其缓存
             $log->delete();

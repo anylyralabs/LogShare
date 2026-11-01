@@ -2,25 +2,29 @@
 
 use App\ApiError;
 use App\Config;
+use App\Controller\AnalyseController;
 use App\Controller\LogController;
 use App\System\SecurityService;
-use Hyperf\HttpMessage\Server\Request;
-use Hyperf\HttpMessage\Server\Response;
+use Tests\Mocks\RedisMock;
 
 beforeEach(function () {
     $this->configRef = new ReflectionClass(Config::class);
     $this->dataProp = $this->configRef->getProperty('data');
     $this->origData = $this->dataProp->getValue();
 
-    $this->tmpDir = CORE_PATH . '/tmp/logshare_sec_test_' . uniqid();
-    mkdir($this->tmpDir, 0777, true);
-
     $cfg = $this->origData;
-    $cfg['filesystem']['path'] = substr($this->tmpDir, strlen(CORE_PATH)) . '/';
-    $cfg['storage']['storageId'] = 'f';
-    $cfg['storage']['storages']['f']['enabled'] = true;
+    $cfg['security']['enabled'] = true;
+    $cfg['security']['contentRules'] = [
+        'enabled' => true,
+        'keywords' => [],
+        'patterns' => [],
+    ];
+    $cfg['security']['ipBans'] = [];
     $cfg['eventQueue']['asyncSecurityAudit'] = false;
     $this->dataProp->setValue(null, $cfg);
+
+    RedisMock::reset();
+    \App\Client\RedisClient::setTestConnection(new RedisMock());
 
     if (!\Hyperf\Context\ApplicationContext::hasContainer()) {
         $container = Mockery::mock(\Psr\Container\ContainerInterface::class);
@@ -39,26 +43,17 @@ beforeEach(function () {
 });
 
 afterEach(function () {
-    if (is_dir($this->tmpDir)) {
-        foreach (glob($this->tmpDir . '/*') ?: [] as $file) {
-            if (is_file($file)) {
-                unlink($file);
-            }
+    \App\Client\RedisClient::setTestConnection(null);
+    RedisMock::reset();
+
+    foreach ([
+        CORE_PATH . '/runtime/content_reject_rules.json',
+        CORE_PATH . '/runtime/security_bans.json',
+        Config::getDynamicConfigPath(),
+    ] as $file) {
+        if (is_file($file)) {
+            @unlink($file);
         }
-        rmdir($this->tmpDir);
-    }
-    $rulesFile = CORE_PATH . '/runtime/content_reject_rules.json';
-    if (is_file($rulesFile)) {
-        @unlink($rulesFile);
-    }
-    $bansFile = CORE_PATH . '/runtime/security_bans.json';
-    if (is_file($bansFile)) {
-        @unlink($bansFile);
-    }
-    // saveContentRules() 会双写动态配置，必须一并清理，避免污染后续本地运行
-    $dynamicPath = Config::getDynamicConfigPath();
-    if (is_file($dynamicPath)) {
-        @unlink($dynamicPath);
     }
     $this->configRef->getProperty('dynamicMtime')->setValue(null, 0);
     $this->configRef->getProperty('dynamicSize')->setValue(null, -1);
@@ -66,93 +61,55 @@ afterEach(function () {
     $this->dataProp->setValue(null, $this->origData);
 });
 
-test('SecurityService ban, unban, and isIpBanned lifecycle', function () {
+test('SecurityService bans an IP and reports the ban state', function () {
     $testIp = '198.51.100.42';
 
-    // 初始未封禁
     expect(SecurityService::isIpBanned($testIp))->toBeFalse();
 
-    // 封禁
     $banResult = SecurityService::banIp($testIp, 3600, 'Malicious crawling test');
     expect($banResult['ip'])->toBe($testIp);
     expect($banResult['reason'])->toBe('Malicious crawling test');
-
-    // 封禁状态与列表检查
     expect(SecurityService::isIpBanned($testIp))->toBeTrue();
-    $list = SecurityService::getBannedIps();
-    $found = array_filter($list, fn($item) => $item['ip'] === $testIp);
-    expect($found)->not->toBeEmpty();
-
-    // 解封
-    SecurityService::unbanIp($testIp);
-    expect(SecurityService::isIpBanned($testIp))->toBeFalse();
 });
 
-test('SecurityService unban leaves the OpenLiteWaf snapshot file untouched', function () {
-    // 封禁的权威状态是 nginx shared dict（跨 worker 共享），worker 0 每 60 秒用 dict 全量
-    // 覆盖快照文件：应用层改文件既解不掉正在生效的封禁，也会被回写冲掉，历史上因此
-    // 在生产完全失效（OpenLiteWaf/data 在应用容器里是只读挂载）。解封改走
-    // POST /security/unban（Lua 侧 T28 覆盖），这里守住反面：绝不改写 WAF 数据文件。
-    putenv('OPENLITEWAF_ADMIN_TOKEN');
-    $snap = $this->tmpDir . '/waf-snapshot.json';
-    $payload = json_encode(['bans' => [['slot' => 0, 'exp' => time() + 600, 'ip' => '203.0.113.7']]]);
-    file_put_contents($snap, $payload);
-    putenv('WAF_SNAPSHOT_PATH=' . $snap);
-
-    expect(SecurityService::unbanIp('203.0.113.7'))->toBeTrue();
-
-    expect(file_get_contents($snap))->toBe($payload, '解封不得改写 OpenLiteWaf 快照文件');
-    putenv('WAF_SNAPSHOT_PATH');
-});
-
-test('SecurityService content rules validation and rejection', function () {
-    SecurityService::saveContentRules([
+test('SecurityService validates configured content rules', function () {
+    $cfg = $this->dataProp->getValue();
+    $cfg['security']['contentRules'] = [
         'enabled' => true,
         'keywords' => ['bad-malware-payload', 'cheat-distro-link'],
         'patterns' => ['/trojan_v\d+/i'],
-    ]);
+    ];
+    $this->dataProp->setValue(null, $cfg);
 
     $rules = SecurityService::getContentRules();
     expect($rules['enabled'])->toBeTrue();
     expect($rules['keywords'])->toContain('bad-malware-payload');
 
-    // 正常文本不抛出
     expect(fn() => SecurityService::validateContent('Normal minecraft log'))->not->toThrow(ApiError::class);
-
-    // 包含违规关键词抛出 ApiError
     expect(fn() => SecurityService::validateContent('Some log with bad-malware-payload included'))
         ->toThrow(ApiError::class);
-
-    // 匹配正则抛出 ApiError
     expect(fn() => SecurityService::validateContent('Detected signature trojan_v2'))
         ->toThrow(ApiError::class);
 });
 
 test('SecurityService resolveClientIp handles trusted reverse proxies and prevents spoofing', function () {
-    // 1. 本地回环或 Docker 内网（受信任代理）转发真实客户端 IP
     $headers = ['x-real-ip' => ['203.0.113.50']];
-    $serverParams = ['remote_addr' => '172.18.0.2']; // Docker bridge IP
-    $ip = SecurityService::resolveClientIp($serverParams, $headers);
-    expect($ip)->toBe('203.0.113.50');
+    $serverParams = ['remote_addr' => '172.18.0.2'];
+    expect(SecurityService::resolveClientIp($serverParams, $headers))->toBe('203.0.113.50');
 
-    // 2. 127.0.0.1 回环受信任代理转发多级 X-Forwarded-For
     $headersXff = ['x-forwarded-for' => ['198.51.100.22, 10.0.0.1']];
     $serverParamsXff = ['remote_addr' => '127.0.0.1'];
-    $ipXff = SecurityService::resolveClientIp($serverParamsXff, $headersXff);
-    expect($ipXff)->toBe('198.51.100.22');
+    expect(SecurityService::resolveClientIp($serverParamsXff, $headersXff))->toBe('198.51.100.22');
 
-    // 3. 不受信任公网 IP（非代理）伪造 X-Real-IP 时，忽略伪造头部，使用直连 remote_addr
     $headersSpoof = ['x-real-ip' => ['1.1.1.1']];
     $serverParamsSpoof = ['remote_addr' => '198.51.100.99'];
-    $ipSpoof = SecurityService::resolveClientIp($serverParamsSpoof, $headersSpoof);
-    expect($ipSpoof)->toBe('198.51.100.99');
+    expect(SecurityService::resolveClientIp($serverParamsSpoof, $headersSpoof))->toBe('198.51.100.99');
 });
 
 test('LogController and AnalyseController enforce IP ban and content rules', function () {
     $bannedIp = '203.0.113.77';
     SecurityService::banIp($bannedIp, 3600, 'Test ban');
 
-    // 1. LogController 拦截封禁 IP
     $bannedStream = Mockery::mock(\Psr\Http\Message\StreamInterface::class);
     $bannedStream->shouldReceive('getContents')->andReturn(json_encode(['content' => 'hello']));
     $bannedStream->shouldReceive('__toString')->andReturn(json_encode(['content' => 'hello']));
@@ -178,13 +135,13 @@ test('LogController and AnalyseController enforce IP ban and content rules', fun
         expect($e->getMessage())->toContain('blocked');
     }
 
-    // 2. 解除封禁后，测试违规内容拦截
-    SecurityService::unbanIp($bannedIp);
-    SecurityService::saveContentRules([
+    $cfg = $this->dataProp->getValue();
+    $cfg['security']['contentRules'] = [
         'enabled' => true,
         'keywords' => ['forbidden_secret_payload'],
         'patterns' => [],
-    ]);
+    ];
+    $this->dataProp->setValue(null, $cfg);
 
     $badContentStream = Mockery::mock(\Psr\Http\Message\StreamInterface::class);
     $badContentPayload = json_encode(['content' => 'Notice: forbidden_secret_payload detected']);
@@ -211,8 +168,7 @@ test('LogController and AnalyseController enforce IP ban and content rules', fun
         expect($e->getMessage())->toContain('prohibited keyword');
     }
 
-    // 3. AnalyseController 违规内容拦截
-    $refAnalyse = new ReflectionClass(\App\Controller\AnalyseController::class);
+    $refAnalyse = new ReflectionClass(AnalyseController::class);
     $analyseCtrl = $refAnalyse->newInstanceWithoutConstructor();
     $refAnalyse->getProperty('request')->setValue($analyseCtrl, $badContentReq);
 
@@ -223,5 +179,4 @@ test('LogController and AnalyseController enforce IP ban and content rules', fun
         expect($e->getCode())->toBe(400);
         expect($e->getMessage())->toContain('prohibited keyword');
     }
-
 });

@@ -6,7 +6,6 @@ use App\Config;
 use App\Controller\LogController;
 use App\Id;
 use App\Log;
-use App\Queue\DeadLetterQueue;
 use App\Queue\EventQueue;
 use App\Queue\Handler\DeobfuscateHandler;
 use App\Queue\Handler\SecurityAuditHandler;
@@ -145,25 +144,6 @@ test('EventQueue halts pipeline when stopPropagation is invoked', function () {
     expect($executionLog)->toBe(['first']);
 });
 
-test('EventQueue stats inspects registered events and queue metrics', function () {
-    $stats = EventQueue::getStats();
-    expect($stats['enabled'])->toBeTrue()
-        ->and($stats['stream'])->toBe('events:log:stream')
-        ->and($stats['group'])->toBe('log-event-workers')
-        ->and($stats['registeredEvents'])->toHaveKey(EventQueue::EVENT_LOG_UPLOADED)
-        ->and($stats['registeredEvents'])->toHaveKey(EventQueue::EVENT_SECURITY_AUDIT);
-});
-
-test('DeadLetterQueue provides list, count, clear and retry capabilities', function () {
-    $evt = new QueueEvent('test.dead', ['logId' => 'test1234'], 'evt_dead_1', 3, 3);
-    DeadLetterQueue::push($evt, 'Fatal database error');
-
-    // 无 Redis 环境下 push 会安全回退日志记录并返回 null，不抛出致命异常
-    expect(DeadLetterQueue::count())->toBeGreaterThanOrEqual(0);
-    expect(DeadLetterQueue::list())->toBeArray();
-    expect(DeadLetterQueue::clear())->toBeBool();
-});
-
 test('SecurityAuditHandler passes compliant logs', function () {
     $log = new Log();
     $id = $log->put("All clean content without forbidden keywords");
@@ -263,53 +243,15 @@ test('LogController upload delegates audit and deobfuscation to EventQueue', fun
         ->and($log->getSource())->toBe('HMCL/3.5.0');
 });
 
-test('executePipeline counts blocked events separately from failed events', function () {
-    \Tests\Mocks\RedisMock::reset();
-    App\Client\RedisClient::setTestConnection(new \Tests\Mocks\RedisMock());
+test('executePipeline returns false for blocked and failed events', function () {
+    EventQueue::register('test.outcome_blocked', function (QueueEvent $evt) {
+        $evt->stopPropagation();
+        return false;
+    }, 10);
+    EventQueue::register('test.outcome_failed', function (QueueEvent $evt) {
+        throw new \RuntimeException('handler boom');
+    }, 10);
 
-    try {
-        EventQueue::register('test.outcome_blocked', function (QueueEvent $evt) {
-            $evt->stopPropagation();
-            return false;
-        }, 10);
-        EventQueue::register('test.outcome_failed', function (QueueEvent $evt) {
-            throw new \RuntimeException('handler boom');
-        }, 10);
-
-        expect(EventQueue::executePipeline(new QueueEvent('test.outcome_blocked', [])))->toBeFalse();
-        expect(EventQueue::executePipeline(new QueueEvent('test.outcome_failed', [])))->toBeFalse();
-
-        $metrics = EventQueue::getMetrics();
-        expect($metrics['processed_blocked'] ?? 0)->toBe(1)
-            ->and($metrics['processed_failed'] ?? 0)->toBe(1)
-            ->and($metrics['processed_success'] ?? 0)->toBe(0);
-    } finally {
-        App\Client\RedisClient::setTestConnection(null);
-        \Tests\Mocks\RedisMock::reset();
-    }
-});
-
-test('event queue stats expose cumulative throughput that survives XACK and XDEL', function () {
-    \Tests\Mocks\RedisMock::reset();
-    App\Client\RedisClient::setTestConnection(new \Tests\Mocks\RedisMock());
-
-    try {
-        $stream = EventQueue::DEFAULT_STREAM;
-        $group = EventQueue::DEFAULT_GROUP;
-        App\Client\RedisStreams::xAdd($stream, ['event' => EventQueue::EVENT_LOG_UPLOADED], 100);
-        App\Client\RedisStreams::xAdd($stream, ['event' => EventQueue::EVENT_LOG_UPLOADED], 100);
-        App\Client\RedisStreams::xGroupCreate($stream, $group);
-        App\Client\RedisStreams::xReadGroup($group, 'worker-0', $stream, 0, 1);
-
-        $stats = EventQueue::getStats();
-
-        // 消费者 XACK + XDEL 后 streamLength 恒为 0，累计吞吐只能由 entries-read 体现
-        expect($stats['entriesRead'])->toBe(1)
-            ->and($stats['consumers'])->toBe(1)
-            ->and($stats['pending'])->toBe(1)
-            ->and($stats['stream'])->toBe($stream);
-    } finally {
-        App\Client\RedisClient::setTestConnection(null);
-        \Tests\Mocks\RedisMock::reset();
-    }
+    expect(EventQueue::executePipeline(new QueueEvent('test.outcome_blocked', [])))->toBeFalse();
+    expect(EventQueue::executePipeline(new QueueEvent('test.outcome_failed', [])))->toBeFalse();
 });

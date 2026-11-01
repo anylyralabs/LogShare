@@ -40,31 +40,7 @@ final class Syslog
         // 1. Output to PHP error_log (stdout/stderr for Docker & Swoole console)
         error_log($formatted);
 
-        $entry = [
-            'id' => bin2hex(random_bytes(6)),
-            'timestamp' => $now,
-            'datetime' => $datetime,
-            'level' => strtolower($level),
-            'component' => $component,
-            'message' => $message,
-        ];
-
-        // 2. Push to Redis ring buffer (up to 1000 items)
-        try {
-            $redis = \App\Client\RedisClient::getRedis();
-            if ($redis !== null) {
-                $encoded = json_encode($entry, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-                if ($encoded !== false) {
-                    $redis->lPush('syslog:recent', $encoded);
-                    $redis->lTrim('syslog:recent', 0, 999);
-                    $redis->expire('syslog:recent', 86400 * 7);
-                }
-            }
-        } catch (\Throwable) {
-            // Fail open if Redis is unavailable
-        }
-
-        // 3. Append to persistent file in runtime/logs
+        // 2. Append to persistent file in runtime/logs
         try {
             $baseDir = defined('CORE_PATH') ? CORE_PATH : (defined('BASE_PATH') ? BASE_PATH : dirname(__DIR__));
             $dir = $baseDir . self::LOG_DIR;

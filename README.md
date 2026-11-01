@@ -140,7 +140,7 @@ app/                      核心类库（App\ 命名空间）
 ├── Queue/                统一日志异步事件队列（EventQueue、QueueEvent、DeadLetterQueue、Handler/）
 ├── ApiResponse.php       统一响应结构封装
 ├── Storage/              持久化存储后端（MariaDbStorage、FilesystemStorage）
-├── System/               系统核心服务（SecurityService、AuditLogManager、StorageHealthService、SpinYarnManager）
+├── System/               系统核心服务（SecurityService、LogPartitionManager）
 ├── Telemetry/            客户端遥测统计服务
 ├── ApiError.php          API 业务异常（ApiExceptionHandler 统一渲染）
 ├── Config.php            配置加载器、环境变量覆盖与动态热重载引擎
@@ -165,7 +165,7 @@ docs/                     历史过程文档与设计规划
 ### 请求处理流程
 
 1. **上传**：`POST /v1/log` → RequestParser 解压请求体 → UploadParser 校验并展开 ZIP → 过滤链快速脱敏 → 执行轻量 Codex 特征分析 → 写入 MariaDB / 文件系统与 Redis 缓存 → **即刻派发 `EVENT_LOG_UPLOADED` 事件** → 毫秒级向客户端返回 200 响应。
-2. **异步流水线处理**：常驻进程 `EventQueueConsumer` 拉取事件 → 执行 `SecurityAuditHandler`（主正文与全部附件敏感规则检测，若违规即刻物理清除日志、记录审计日志并封禁恶意 IP，阻断后续流转）→ 执行 `DeobfuscateHandler`（调用 SpinYarn 原生反混淆并原子回写存储与刷新缓存）→ 异常自动重试，耗尽转入死信流 `events:log:dead`。
+2. **异步流水线处理**：常驻进程 `EventQueueConsumer` 拉取事件 → 执行 `SecurityAuditHandler`（主正文与全部附件敏感规则检测，若违规即刻物理清除日志并通过 Syslog 记录原因、封禁恶意 IP，阻断后续流转）→ 执行 `DeobfuscateHandler`（调用 SpinYarn 原生反混淆并原子回写存储与刷新缓存）→ 异常自动重试，耗尽转入死信流 `events:log:dead`。
 3. **读取**：`GET /v1/raw/{id}`（或子文件路径）→ Redis 缓存查询（如启用）→ 未命中时回源存储 → TTL 续期。
 4. **分析**：`GET /v1/insights/{id}` → 加载日志 → Detective 检测服务端类型与版本 → Codex 引擎解析 → 格式化输出。
 5. **删除**：`DELETE /v1/log/{id}` → Bearer Token 鉴权（SHA-256 哈希比对）→ 删除存储与缓存。

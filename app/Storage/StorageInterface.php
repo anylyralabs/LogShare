@@ -55,27 +55,5 @@ interface StorageInterface
      */
     public static function Delete(\App\Id $id): bool;
 
-    /**
-     * List logs with pagination and optional filters.
-     *
-     * @param int $limit
-     * @param int $offset
-     * @param string|null $source
-     * @param int|null $since
-     * @param int|null $until
-     * @param string|null $keyword
-     * @return array<int, array{id: string, size: int, source: ?string, created: int, filesCount: int}>
-     */
-    public static function List(int $limit = 20, int $offset = 0, ?string $source = null, ?int $since = null, ?int $until = null, ?string $keyword = null): array;
 
-    /**
-     * Count total logs matching optional filters.
-     *
-     * @param string|null $source
-     * @param int|null $since
-     * @param int|null $until
-     * @param string|null $keyword
-     * @return int
-     */
-    public static function Count(?string $source = null, ?int $since = null, ?int $until = null, ?string $keyword = null): int;
 }

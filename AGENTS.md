@@ -79,7 +79,7 @@ php vendor/bin/pest --filter=TestName
 - Swoole 是常驻进程：进程级缓存、扩展句柄、注解代理类都跨请求存活。改解析 / 反混淆 / 进程状态后必须重启，不能只改文件。
 - 常驻进程外呼 cURL 一律 `CURLOPT_FORBID_REUSE => true`，并在 `finally` 中 `curl_close` / `$ch = null`，否则 FD 累积到 EMFILE；不要用 Swoole 协程 hook 不支持的选项（如 `CURLOPT_MAXFILESIZE`），在应用层限制载荷。
 - `RedisClient` 显式设置 `OPT_READ_TIMEOUT`（默认 10s，高于消费者 2s/5s 阻塞等待），不要调低，否则会周期性断连。
-- 诊断日志用 `App\Syslog::error()`，不要直接 `error_log()`；`runtime/logs/audit.log` 有 5MB 轮转与尾部读取，不要再整文件 `file()`。
+- 诊断日志用 `App\Syslog::error()`，不要直接 `error_log()`；`runtime/logs/system.log` 有 5MB 轮转，不要再整文件 `file()`。
 - 请求体解压统一走 `App\Parser\RequestParser`（20 MB 上限）；brotli 用单参 `brotli_uncompress($body)`，第二参是字典，传整数会 TypeError。
 - 响应压缩由 Swoole `http_compression`（level 6、min 1024）优先 Brotli；nginx 只做 gzip 兜底并透传 `Accept-Encoding`。
 - 配置统一走 `App\Config::Get()`；Admin 的动态修改落 `runtime/dynamic_config.json` 并跨 worker 热生效，不要在进程启动时缓存一份配置副本。

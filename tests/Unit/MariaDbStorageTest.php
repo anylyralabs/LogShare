@@ -324,48 +324,6 @@ private function ensureSchema(): void
         expect($event->INTERVAL_FIELD)->toBe('HOUR');
     }
 
-    public function testListAndCountFilters(): void
-    {
-        $this->requireDb();
-
-        $prefix = 'mdb_test_' . uniqid();
-        $id1 = MariaDbStorage::Put('log content 1', new Token(), [], "{$prefix}_client");
-        $id2 = MariaDbStorage::Put('log content 2', new Token(), [], "{$prefix}_server");
-        $id3 = MariaDbStorage::Put('log content 3', new Token(), [], '未指定');
-
-        try {
-            $totalCount = MariaDbStorage::Count();
-            expect($totalCount)->toBeGreaterThanOrEqual(3);
-
-            // Filter by source
-            $clientCount = MariaDbStorage::Count("{$prefix}_client");
-            expect($clientCount)->toBe(1);
-
-            $clientList = MariaDbStorage::List(10, 0, "{$prefix}_client");
-            expect($clientList)->toHaveCount(1);
-            expect($clientList[0]['id'])->toBe($id1->get());
-            expect($clientList[0]['source'])->toBe("{$prefix}_client");
-
-            // Filter by '未指定'
-            $unspecList = MariaDbStorage::List(10, 0, '未指定');
-            expect(count($unspecList))->toBeGreaterThanOrEqual(1);
-
-            // Filter by keyword (ID matching)
-            $kwList = MariaDbStorage::List(10, 0, null, null, null, $id2->get());
-            expect($kwList)->toHaveCount(1);
-            expect($kwList[0]['id'])->toBe($id2->get());
-
-            // Filter by time range
-            $now = time();
-            $timeCount = MariaDbStorage::Count(null, $now - 60, $now + 60);
-            expect($timeCount)->toBeGreaterThanOrEqual(3);
-        } finally {
-            MariaDbStorage::Delete($id1);
-            MariaDbStorage::Delete($id2);
-            MariaDbStorage::Delete($id3);
-        }
-    }
-
     public function testMetadataSerializationAndRoundTrip(): void
     {
         $this->requireDb();

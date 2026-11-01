@@ -81,15 +81,6 @@ class InMemoryDedupStorage implements StorageInterface
         return true;
     }
 
-    public static function List(int $limit = 20, int $offset = 0, ?string $source = null, ?int $since = null, ?int $until = null, ?string $keyword = null): array
-    {
-        return [];
-    }
-
-    public static function Count(?string $source = null, ?int $since = null, ?int $until = null, ?string $keyword = null): int
-    {
-        return count(self::$rows);
-    }
 }
 
 beforeEach(function () {

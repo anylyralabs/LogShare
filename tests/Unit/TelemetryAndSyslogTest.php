@@ -2,56 +2,20 @@
 
 declare(strict_types=1);
 
-use App\Syslog;
-use App\System\SystemLogManager;
 use App\Telemetry\TelemetryService;
 use Tests\Mocks\RedisMock;
 
 beforeEach(function () {
-    // 遥测与系统日志都依赖 Redis；本机默认 Config.inc.php 会关闭缓存，
-    // 直接依赖全局连接会让这组用例在本地必然失败。统一注入 RedisMock，
-    // 保证测试结果与是否装了 redis-server 无关。
+    // 遥测聚合依赖 Redis；本机默认 Config.inc.php 会关闭缓存，
+    // 直接依赖全局连接会让用例在本地失败。统一注入 RedisMock。
     RedisMock::reset();
     \App\Client\RedisClient::setTestConnection(new RedisMock());
 
-    SystemLogManager::clearLogs();
     TelemetryService::clearStats();
 });
 
 afterEach(function () {
     \App\Client\RedisClient::setTestConnection(null);
-});
-
-test('Syslog writes structured log to Redis and file', function () {
-    Syslog::info('TestComp', 'This is an info test');
-    Syslog::warning('TestComp', 'This is a warning test');
-    Syslog::error('TestComp', 'This is an error test');
-
-    $logs = SystemLogManager::getLogs(10);
-    expect($logs)->toBeArray();
-    expect(count($logs))->toBeGreaterThanOrEqual(3);
-
-    // Latest log first
-    expect($logs[0]['message'])->toBe('This is an error test');
-    expect($logs[0]['level'])->toBe('error');
-    expect($logs[0]['component'])->toBe('TestComp');
-
-    // Filter by level
-    $errorOnly = SystemLogManager::getLogs(10, 'error');
-    foreach ($errorOnly as $item) {
-        expect($item['level'])->toBe('error');
-    }
-
-    // Filter by keyword
-    $keywordLogs = SystemLogManager::getLogs(10, null, 'warning test');
-    expect(count($keywordLogs))->toBe(1);
-    expect($keywordLogs[0]['message'])->toContain('warning test');
-
-    // Clear logs
-    $cleared = SystemLogManager::clearLogs();
-    expect($cleared)->toBeTrue();
-    $afterClear = SystemLogManager::getLogs(10);
-    expect($afterClear)->toBeEmpty();
 });
 
 test('TelemetryService records API metrics and computes stats', function () {

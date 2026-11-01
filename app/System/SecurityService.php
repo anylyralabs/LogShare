@@ -169,74 +169,6 @@ final class SecurityService
     }
 
     /**
-     * 查询当前被封禁的 IP 列表。
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    public static function getBannedIps(): array
-    {
-        $bans = [];
-        $now = time();
-        $redis = RedisClient::getRedis();
-
-        // 1. 从 Redis 检索主动封禁记录
-        if ($redis !== null) {
-            try {
-                // KEYS 会阻塞整个 Redis 实例（单线程），管理端封禁列表又是
-                // 高频轮询接口；改用 SCAN 游标分批遍历。
-                $keys = [];
-                $iterator = null;
-                do {
-                    $batch = $redis->scan($iterator, self::BAN_PREFIX . '*', 200);
-                    if (is_array($batch)) {
-                        foreach ($batch as $found) {
-                            $keys[] = $found;
-                        }
-                    }
-                } while ($iterator !== 0 && $iterator !== null && count($keys) < 10000);
-
-                foreach ($keys as $k) {
-                    $val = $redis->get($k);
-                    if (is_string($val) && $val !== '') {
-                        $decoded = json_decode($val, true);
-                        if (is_array($decoded) && isset($decoded['ip'])) {
-                            $bans[$decoded['ip']] = [
-                                'ip' => (string) $decoded['ip'],
-                                'reason' => (string) ($decoded['reason'] ?? '管理员主动封禁'),
-                                'bannedAt' => (int) ($decoded['bannedAt'] ?? $now),
-                                'expiresAt' => (int) ($decoded['expiresAt'] ?? ($now + 86400)),
-                                'operator' => (string) ($decoded['operator'] ?? 'admin'),
-                                'source' => 'manual',
-                            ];
-                        }
-                    }
-                }
-            } catch (\Throwable $e) {
-                \App\Syslog::error('SecurityService', 'Failed to read redis bans: ' . $e->getMessage());
-            }
-        }
-
-        // 2. 从本地持久化文件合并（在 Redis 未配置/未启动时兜底）
-        $fileBans = self::readFileBans();
-        foreach ($fileBans as $ip => $item) {
-            if (!isset($bans[$ip]) && (int) ($item['expiresAt'] ?? 0) > $now) {
-                $bans[$ip] = $item;
-            }
-        }
-
-        // 3. 从 OpenLiteWaf 快照合并 WAF 自动拦截名单
-        $wafBans = self::readWafSnapshotBans();
-        foreach ($wafBans as $item) {
-            $ip = $item['ip'];
-            if (!isset($bans[$ip])) {
-                $bans[$ip] = $item;
-            }
-        }
-
-        return array_values($bans);
-    }
-
-    /**
      * 主动封禁指定 IP。
      *
      * @param string $ip IPv4 或 IPv6 地址
@@ -245,7 +177,7 @@ final class SecurityService
      * @param string $operator 操作人
      * @return array{ip: string, reason: string, expiresAt: int, operator: string}
      */
-    public static function banIp(string $ip, int $ttlSeconds = 86400, string $reason = '管理员主动封禁', string $operator = 'admin'): array
+    public static function banIp(string $ip, int $ttlSeconds = 86400, string $reason = '自动封禁', string $operator = 'system'): array
     {
         $ip = trim($ip);
         if (!filter_var($ip, FILTER_VALIDATE_IP)) {
@@ -286,34 +218,6 @@ final class SecurityService
             'expiresAt' => $expiresAt,
             'operator' => $operator,
         ];
-    }
-
-    /**
-     * 解封指定 IP（应用层 Redis / 本地文件封禁）。
-     *
-     * @param string|null $wafSync 出参：边缘封禁的同步结果，
-     *                             ok / skipped（未配置令牌）/ failed / invalid
-     */
-    public static function unbanIp(string $ip, ?string &$wafSync = null): bool
-    {
-        $ip = trim($ip);
-        if ($ip === '') {
-            return false;
-        }
-
-        $redis = RedisClient::getRedis();
-        if ($redis !== null) {
-            try {
-                $redis->del(self::BAN_PREFIX . $ip);
-            } catch (\Throwable $e) {
-                \App\Syslog::error('SecurityService', 'Failed to delete redis ban: ' . $e->getMessage());
-            }
-        }
-
-        self::removeFileBan($ip);
-        $wafSync = self::syncUnbanToWaf($ip);
-
-        return true;
     }
 
     /**
@@ -402,15 +306,6 @@ final class SecurityService
         self::writeJsonFile(CORE_PATH . self::BANS_FILE, $bans);
     }
 
-    private static function removeFileBan(string $ip): void
-    {
-        $bans = self::readFileBans();
-        if (isset($bans[$ip])) {
-            unset($bans[$ip]);
-            self::writeJsonFile(CORE_PATH . self::BANS_FILE, $bans);
-        }
-    }
-
     /**
      * 原子写入本地 JSON（临时文件 + rename），并把权限收紧到 0600。
      *
@@ -452,87 +347,6 @@ final class SecurityService
         $base = (string) \App\Config::GetPath('urls.apiBaseUrl', '');
         $host = parse_url($base, PHP_URL_HOST);
         return is_string($host) && $host !== '' ? $host : 'api.logshare.cn';
-    }
-
-    /**
-     * 获取 WAF 拦截态势概览（来自 OpenLiteWaf 快照或公开接口）。
-     *
-     * @return array<string, mixed>
-     */
-    public static function getWafOverview(): array
-    {
-        $data = self::loadWafData();
-        if (is_array($data)) {
-            $counters = (array) ($data['counters'] ?? []);
-            $blockedCat = (array) ($data['blocked'] ?? []);
-
-            $totalRequests = (int) ($counters['total'] ?? $data['requests_total'] ?? 0);
-            $blockedTotal = (int) ($counters['blocked'] ?? $data['blocked_total'] ?? 0);
-            $bannedActive = (int) ($data['banned_active'] ?? $counters['banned'] ?? (is_array($data['bans'] ?? null) ? count($data['bans']) : 0));
-
-            $categories = [
-                'cc' => (int) ($counters['cc'] ?? $blockedCat['cc'] ?? 0),
-                'sqli' => (int) ($counters['sqli'] ?? $blockedCat['sqli'] ?? 0),
-                'xss' => (int) ($counters['xss'] ?? $blockedCat['xss'] ?? 0),
-                'traversal' => (int) ($counters['traversal'] ?? $blockedCat['traversal'] ?? 0),
-                'rce' => (int) ($counters['rce'] ?? $blockedCat['rce'] ?? 0),
-                'probe' => (int) ($counters['probe'] ?? $blockedCat['probe'] ?? 0),
-            ];
-
-            // 提取高频攻击 IP
-            $topIps = [];
-            if (isset($data['top_ips']) && is_array($data['top_ips'])) {
-                $topIps = $data['top_ips'];
-            } elseif (isset($data['logs']) && is_array($data['logs'])) {
-                $ipCounts = [];
-                foreach ($data['logs'] as $logItem) {
-                    $rawStr = is_string($logItem) ? $logItem : (string) ($logItem['s'] ?? '');
-                    if ($rawStr !== '') {
-                        $itemData = json_decode($rawStr, true);
-                        if (is_array($itemData) && !empty($itemData['ip'])) {
-                            $ip = (string) $itemData['ip'];
-                            $ipCounts[$ip] = ($ipCounts[$ip] ?? 0) + 1;
-                        }
-                    }
-                }
-                arsort($ipCounts);
-                foreach (array_slice($ipCounts, 0, 10, true) as $ip => $cnt) {
-                    $topIps[] = ['ip' => $ip, 'n' => $cnt];
-                }
-            }
-
-            $trends = $data['trends'] ?? $data['trend'] ?? [];
-
-            return [
-                'available' => true,
-                'total_requests' => $totalRequests,
-                'blocked_total' => $blockedTotal,
-                'banned_active' => $bannedActive,
-                'categories' => $categories,
-                // WAF v1.3.0 起按 "probe#57" / "cc" 归因当前封禁，
-                // 后台据此一眼看出是哪条规则在批量封人；旧版 WAF 无此字段时为空表
-                'ban_reasons' => (array) ($data['ban_reasons'] ?? []),
-                'top_ips' => $topIps,
-                'trend' => is_array($trends) ? $trends : [],
-            ];
-        }
-
-        return [
-            'available' => false,
-            'total_requests' => 0,
-            'blocked_total' => 0,
-            'banned_active' => 0,
-            'categories' => [
-                'cc' => 0,
-                'sqli' => 0,
-                'xss' => 0,
-                'traversal' => 0,
-                'rce' => 0,
-                'probe' => 0,
-            ],
-            'top_ips' => [],
-            'trend' => [],
-        ];
     }
 
     /**
@@ -760,83 +574,6 @@ final class SecurityService
     }
 
     /**
-     * 保存动态内容拒绝规则（自动加密持久化关键词与正则）。
-     *
-     * @param array<string, mixed> $payload
-     * @return array{enabled: bool, keywords: string[], patterns: string[]}
-     */
-    public static function saveContentRules(array $payload): array
-    {
-        $enabled = (bool) ($payload['enabled'] ?? true);
-        $keywords = [];
-        if (isset($payload['keywords']) && is_array($payload['keywords'])) {
-            foreach ($payload['keywords'] as $kw) {
-                $kw = trim((string) $kw);
-                if ($kw !== '') {
-                    // 若传入是密文先解密校验，确保明文有效
-                    $plainKw = self::decryptSecret($kw);
-                    if ($plainKw !== '') {
-                        $keywords[] = $plainKw;
-                    }
-                }
-            }
-        }
-
-        $patterns = [];
-        if (isset($payload['patterns']) && is_array($payload['patterns'])) {
-            foreach ($payload['patterns'] as $pt) {
-                $pt = trim((string) $pt);
-                if ($pt !== '') {
-                    $plainPt = self::decryptSecret($pt);
-                    // 校验正则表达式合法性
-                    if (@preg_match($plainPt, '') === false) {
-                        throw new ApiError(400, "Invalid regular expression pattern: {$plainPt}");
-                    }
-                    $patterns[] = $plainPt;
-                }
-            }
-        }
-
-        $plainKeywords = array_values(array_unique($keywords));
-        $plainPatterns = array_values(array_unique($patterns));
-
-        // 存盘与动态配置中进行对称加密存储，杜绝明文敏感词物理暴露
-        $encryptedKeywords = self::encryptRulesList($plainKeywords);
-        $encryptedPatterns = self::encryptRulesList($plainPatterns);
-
-        $diskData = [
-            'enabled' => $enabled,
-            'keywords' => $encryptedKeywords,
-            'patterns' => $encryptedPatterns,
-            'updatedAt' => time(),
-        ];
-
-        // 1. 持久化密文到 runtime/content_reject_rules.json（原子写 + 0600）
-        self::writeJsonFile(CORE_PATH . self::RULES_FILE, $diskData);
-
-        // 2. 双写密文同步到 Config 动态配置，确保跨进程多 Worker 立即生效且重启不丢失
-        try {
-            Config::saveDynamic([
-                'security' => [
-                    'contentRules' => [
-                        'enabled' => $enabled,
-                        'keywords' => $encryptedKeywords,
-                        'patterns' => $encryptedPatterns,
-                    ],
-                ],
-            ]);
-        } catch (\Throwable $e) {
-            \App\Syslog::error('SecurityService', 'Sync content rules to dynamic config failed: ' . $e->getMessage());
-        }
-
-        return [
-            'enabled' => $enabled,
-            'keywords' => $plainKeywords,
-            'patterns' => $plainPatterns,
-        ];
-    }
-
-    /**
      * 校验日志或文件文本是否包含违规内容。
      *
      * @param string $content
@@ -1009,63 +746,6 @@ final class SecurityService
             ];
         }
         @file_put_contents($path, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-    }
-
-    /**
-     * 联动解除 OpenLiteWaf 的边缘封禁：容器内直连 Nginx 的运维端点。
-     *
-     * 为什么不改写 snapshot.json：封禁的权威状态在 ngx shared dict（跨 worker 共享），
-     * worker 0 每 60 秒用 dict 全量覆盖快照文件 —— 改文件既解不掉正在生效的封禁，也会被
-     * 回写冲掉；而 WAF 侧还需连同封禁槽位一起清理，否则重启时 init 会据快照复活封禁。
-     * 走 HTTP 由 Lua 自己清键并立即落盘，一次调用即最终一致。
-     *
-     * 未配置 OPENLITEWAF_ADMIN_TOKEN 时返回 skipped：应用层封禁（Redis / 文件）已解除，
-     * 边缘封禁等 TTL 自然到期（WAF 端点未配置令牌时一律 404，fail-closed）。
-     *
-     * @return string ok | skipped | failed | invalid
-     */
-    private static function syncUnbanToWaf(string $ip): string
-    {
-        if (filter_var($ip, FILTER_VALIDATE_IP) === false) {
-            return 'invalid';
-        }
-        $token = trim((string) (getenv('OPENLITEWAF_ADMIN_TOKEN') ?: ''));
-        if ($token === '') {
-            return 'skipped';
-        }
-
-        $ch = null;
-        try {
-            // 与 loadWafData() 同一形态：容器网内直连 nginx，证书是为公网域名签发的，
-            // 故关闭校验；令牌走请求头，不进 query，避免落入 access_log
-            $ch = curl_init('https://nginx/security/unban?ip=' . rawurlencode($ip));
-            if ($ch === false) {
-                return 'failed';
-            }
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'POST');
-            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 1);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 3);
-            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, [
-                'Host: ' . self::wafHost(),
-                'X-OpenLiteWaf-Token: ' . $token,
-            ]);
-            curl_setopt($ch, CURLOPT_FORBID_REUSE, true);
-            $res = curl_exec($ch);
-            if (is_string($res) && str_contains($res, '"ok":true')) {
-                return 'ok';
-            }
-            \App\Syslog::error('SecurityService', 'OpenLiteWaf unban sync failed for ' . $ip . ': ' . var_export($res, true));
-            return 'failed';
-        } catch (\Throwable $e) {
-            \App\Syslog::error('SecurityService', 'OpenLiteWaf unban sync error for ' . $ip . ': ' . $e->getMessage());
-            return 'failed';
-        } finally {
-            // 常驻协程进程：显式释放句柄，避免 FD 累积（EMFILE）
-            $ch = null;
-        }
     }
 
     /**

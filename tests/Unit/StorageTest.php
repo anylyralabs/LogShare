@@ -195,38 +195,3 @@ test('FilesystemStorage renewed log is not removed by CleanupExpired (S1 regress
     expect(FilesystemStorage::CleanupExpired())->toBe(1);
     expect(FilesystemStorage::Get($id))->toBeNull();
 });
-
-test('FilesystemStorage defaults source to 未指定 and supports List/Count filtering', function () {
-    $data = $this->dataProp->getValue();
-    $data['filesystem']['path'] = substr($this->tmpDir, strlen(CORE_PATH)) . '/';
-    $this->dataProp->setValue(null, $data);
-
-    $idDefault = FilesystemStorage::Put('default log', null, [], null);
-    $idCustom = FilesystemStorage::Put('custom log', null, [], 'FCL/1.2.0');
-
-    $docDefault = FilesystemStorage::Get($idDefault);
-    $docCustom = FilesystemStorage::Get($idCustom);
-
-    expect($docDefault['source'])->toBe('未指定');
-    expect($docCustom['source'])->toBe('FCL/1.2.0');
-
-    $listAll = FilesystemStorage::List();
-    expect($listAll)->toHaveCount(2);
-
-    $listDefault = FilesystemStorage::List(20, 0, '未指定');
-    expect($listDefault)->toHaveCount(1);
-    expect($listDefault[0]['id'])->toBe($idDefault->get());
-    expect($listDefault[0]['source'])->toBe('未指定');
-
-    $listCustom = FilesystemStorage::List(20, 0, 'FCL/1.2.0');
-    expect($listCustom)->toHaveCount(1);
-    expect($listCustom[0]['id'])->toBe($idCustom->get());
-    expect($listCustom[0]['source'])->toBe('FCL/1.2.0');
-
-    expect(FilesystemStorage::Count('未指定'))->toBe(1);
-    expect(FilesystemStorage::Count('FCL/1.2.0'))->toBe(1);
-    expect(FilesystemStorage::Count('non-existent'))->toBe(0);
-
-    FilesystemStorage::Delete($idDefault);
-    FilesystemStorage::Delete($idCustom);
-});
