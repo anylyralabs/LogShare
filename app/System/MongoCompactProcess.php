@@ -25,11 +25,6 @@ final class MongoCompactProcess extends AbstractProcess
 
     public bool $enableCoroutine = false;
 
-    public function isEnable($server): bool
-    {
-        return MongoStorage::compactionEnabled();
-    }
-
     public function handle(): void
     {
         $config = Config::Get('mongo');
