@@ -61,10 +61,11 @@ php vendor/bin/pest --filter=TestName
 ## 事件队列
 
 - `LogController::create` 只做快速 `preFilter` + 轻量 Codex 分析 + 落库，然后派发事件并立即响应；耗时操作在 `EventQueueConsumer`（进程名 `event-queue-consumer`）中执行。异步审核命中违规会物理删除日志、阻断后续 handler 并封禁来源 IP。
-- 成功即 `XACK` + `XDEL`，所以 `streamLength` / `backlog` 稳态恒为 0，不能据此判断空转；看消费组 `entriesRead` 与 `counters`。违规阻断计入 `processed_blocked`，不是 `processed_failed`。
-- 重试耗尽入死信 `events:log:dead`；入队前必须确认 `DeadLetterQueue::push` 成功再 `XACK` / `XDEL`，避免静默丢事件。
-- `EventQueue::dispatch()` 在 Redis 不可用时协程内异步降级、CLI/单测同步降级；不要把 Redis 当硬依赖。
-- `EventQueueConsumer` 用固定 worker 名并周期性 `XAUTOCLAIM` 回收崩溃条目；两阶段排空与自回收逻辑不要删，否则 stale consumer 与 RSS 会累积。
+- 流水线固定为 `log.uploaded -> SecurityAuditHandler -> DeobfuscateHandler`，不再提供通用监听器注册、优先级或闭包 handler。
+- 成功即 `XACK` + `XDEL`；失败保留 pending 等待 reclaim。重试计数只存 `events:attempts:<streamId>`（7 天 TTL），达到 `eventQueue.maxAttempts` 后写入死信 `events:log:dead`；死信写入失败时保留 pending，绝不静默丢事件。
+- `EventQueue::dispatch()` 在 Redis 可用时投递 Stream；队列关闭或 Redis 不可用时同步执行同一流水线，避免不可持久化的协程降级。
+- 消费者只有 1 个 worker 协程与 1 个 reclaim 协程；`XAUTOCLAIM` 的空闲阈值为 5 分钟，避免长任务被重复认领。每处理 1000 条且无在途任务后优雅退出，由 Swoole manager 拉起释放 RSS。
+- 主事件流 `XADD` 不做 MAXLEN 近似裁剪；积压增长是可见、可恢复的，静默丢事件不是。
 
 ## SpinYarn（可选反混淆）
 

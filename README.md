@@ -41,7 +41,7 @@ php scripts/widen_token_column.php
 | `filter` | 上传前的预处理过滤链（脱敏规则），按配置顺序执行 |
 | `id` | 日志 ID 的字符集与长度（修改会破坏已有 ID） |
 | `security` | 动态合规防护：AES-256-GCM 密文存储违规关键词与正则、IP 黑名单与反向代理真实 IP 判定 |
-| `eventQueue` | 统一日志事件队列：Redis Stream 键名与消费组、最大重试次数、异步反混淆与异步安全审核开关 |
+| `eventQueue` | 统一日志事件队列：Redis Stream 键名与消费组、最大重试次数（`maxAttempts`）、异步反混淆与异步安全审核开关 |
 | `rateLimit` | 应用层限流（limit / window，Redis INCR 实现） |
 | `spinyarn` | 反混淆扩展：映射目录与缓存水位 |
 | `urls` | 前端与 API 的基础 URL |

@@ -24,6 +24,16 @@
 - **子表关联补 `created`**，版本/加载器统计与 `filesCount` 不再跨分区串行。
 - **上传路径改为只解析 64KB 头部**：3.5MB 日志从 1.9s 降到 13ms，全文分析移到 `/v1/insights` 首次访问。
 
+### 队列
+
+- **固定流水线**：只保留 `log.uploaded -> SecurityAuditHandler -> DeobfuscateHandler`，移除通用监听器注册、优先级、闭包 handler 与 legacy 事件；`QueueEvent` 不再承载重试次数。
+- **同步降级**：Redis 可用时投递 Stream；队列关闭或 Redis 不可用时在请求内同步执行同一流水线，不再使用不可持久化的协程降级。
+- **消费与重试简化**：单 worker + 单 reclaim 协程，删除僵尸消费者清理、空闲/内存回收与强制排空；每处理 1000 条且无在途任务后优雅退出。
+- **重试语义统一**：重试次数只存 `events:attempts:<streamId>`（7 天 TTL），达到 `eventQueue.maxAttempts`（默认 3）后进入死信；死信写入失败时保留 pending。
+- **避免重复处理**：`XAUTOCLAIM` 空闲阈值改为 5 分钟，长任务不再因 60 秒 reclaim 被并发重复执行。
+- **主队列不裁剪**：`XADD` 不再使用 `MAXLEN ~ 10000`，避免积压时静默裁掉未消费或 pending 事件。
+- **RedisStreams 收敛**：删除 `xLen`、`xInfoGroups`、`xInfoConsumers`、`xGroupDelConsumer`、`xRead`、`xPending` 及队列辅助键透传等无调用方法。
+
 ### 移除
 
 - **应用层 Admin API 整体移除**：不再注册 `/{version}/admin/*`，删除 `AdminController`、`AdminAuthMiddleware`、Admin 配置段与 `ADMIN_ENABLED` / `ADMIN_TOKEN`；日志管理、配置管理、分析、存储健康、缓存清理、安全规则管理、SpinYarn 测试、审计日志、事件队列与死信管理接口全部下线。
