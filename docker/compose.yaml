@@ -84,11 +84,8 @@ services:
     environment:
       APP_ENV: prod
       SCAN_CACHEABLE: "true"
-      DB_HOST: mariadb
-      DB_PORT: "3306"
-      DB_DATABASE: logshare
-      DB_USERNAME: logshare
-      DB_PASSWORD: ${MARIADB_PASSWORD:?MARIADB_PASSWORD must be set}
+      MONGODB_URI: "mongodb://logshare:${MONGO_PASSWORD:?MONGO_PASSWORD must be set}@mongo:27017/?authSource=logshare"
+      MONGODB_DATABASE: logshare
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
@@ -96,7 +93,7 @@ services:
       # OpenLiteWaf/data 保持只读挂载：应用容器不需要、也不应有权改写 nginx 的权威状态文件
       OPENLITEWAF_ADMIN_TOKEN: ${OPENLITEWAF_ADMIN_TOKEN:-}
     depends_on:
-      mariadb:
+      mongo:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -116,47 +113,32 @@ services:
       retries: 10
       start_period: 40s
 
-  mariadb:
+  mongo:
     logging: *default-logging
-    image: mariadb:11.8
-    container_name: logshare-mariadb
-    # 单文件不设上限，20 MiB 总预算需要 MariaDB 放宽单包上限
-    command: --event-scheduler=ON --max-allowed-packet=64M
+    image: mongo:7.0
+    container_name: logshare-mongo
+    # MongoDB 7.0 兼容 ARM64 39-bit VA 内核（8.0 的 TCMalloc 在该环境会启动失败）。
+    # TTL 删除后的磁盘回收由 Hyperf 的 MongoCompactProcess 周期性 compact 兜底；
+    # MongoDB 8.0 且账号具备权限时会优先使用内置 autoCompact。
+    command: ["mongod", "--bind_ip_all", "--wiredTigerCacheSizeGB", "0.5"]
     environment:
-      MARIADB_DATABASE: logshare
-      MARIADB_USER: logshare
-      # 生产部署请通过宿主机环境变量覆盖默认密码
-      MARIADB_PASSWORD: ${MARIADB_PASSWORD:?MARIADB_PASSWORD must be set}
-      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD must be set}
-      MARIADB_ROOT_HOST: "%"
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?MONGO_ROOT_PASSWORD must be set}
+      MONGO_INITDB_DATABASE: logshare
+      MONGO_APP_USERNAME: logshare
+      MONGO_APP_PASSWORD: ${MONGO_PASSWORD:?MONGO_PASSWORD must be set}
     volumes:
-      - mariadb-data:/var/lib/mysql
-      - ./mariadb-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - mongo-data:/data/db
+      - ./mongo-init.js:/docker-entrypoint-initdb.d/init.js:ro
     networks:
       - logshare-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "healthcheck.sh --connect --innodb_initialized && mariadb -uroot -p\"$$MARIADB_ROOT_PASSWORD\" -Nse \"SELECT COUNT(*) = 1 FROM information_schema.EVENTS WHERE EVENT_SCHEMA = 'logshare' AND EVENT_NAME = 'cleanup_expired_logs' AND STATUS = 'ENABLED'\" | grep -q 1"]
+      test: ["CMD-SHELL", "mongosh --quiet -u root -p \"$$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin --eval 'db.adminCommand({ ping: 1 }).ok' | grep -q 1"]
       interval: 10s
       timeout: 5s
       retries: 8
       start_period: 30s
-
-  mariadb-events:
-    image: mariadb:11.8
-    container_name: logshare-mariadb-events
-    entrypoint: /bin/sh
-    command: -c 'until mariadb-admin ping -hmariadb -uroot --silent; do sleep 2; done; until mariadb -hmariadb -uroot logshare < /mariadb-events.sql; do sleep 2; done; echo "MariaDB events initialized successfully."'
-    environment:
-      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD must be set}
-      MYSQL_PWD: ${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD must be set}
-    volumes:
-      - ./mariadb-events.sql:/mariadb-events.sql:ro
-    depends_on:
-      - mariadb
-    networks:
-      - logshare-network
-    restart: "no"
 
   redis:
     logging: *default-logging
@@ -181,8 +163,8 @@ services:
 volumes:
   redis-data:
     name: logshare-redis-data
-  mariadb-data:
-    name: logshare-mariadb-data
+  mongo-data:
+    name: logshare-mongo-data
 
 networks:
   logshare-network:

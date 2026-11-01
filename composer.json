@@ -11,6 +11,8 @@
     "require": {
         "php": ">=8.4",
         "ext-json": "*",
+        "ext-mongodb": "^2.5",
+        "mongodb/mongodb": "^2.5",
         "aternos/codex-minecraft": "^5.1.0",
         "ext-zlib": "*",
         "ext-mbstring": "*",
@@ -26,8 +28,6 @@
         "hyperf/dispatcher": "~3.2.0",
         "hyperf/exception-handler": "~3.2.0",
         "hyperf/command": "~3.2.0",
-        "hyperf/database": "~3.2.0",
-        "hyperf/db-connection": "~3.2.0",
         "hyperf/process": "~3.2.0"
     },
     "require-dev": {

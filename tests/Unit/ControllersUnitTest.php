@@ -42,12 +42,12 @@ beforeEach(function () {
     $this->origData = $this->dataProp->getValue();
 
     $data = $this->origData;
-    $data['storage']['storages']['s'] = [
+    $data['storage']['storages']['m'] = [
         'name' => 'InMemory',
         'class' => InMemoryStorage::class,
         'enabled' => true,
     ];
-    $data['storage']['storageId'] = 's';
+    $data['storage']['storageId'] = 'm';
     $data['cache']['enabled'] = false;
     $this->dataProp->setValue(null, $data);
     InMemoryStorage::reset();

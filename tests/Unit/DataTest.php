@@ -69,7 +69,7 @@ test('MetadataEntry allFromArray caps at max entries', function () {
     }
     $entries = MetadataEntry::allFromArray($data);
 
-    // 同 key 会被去重（log_metadata 主键为 (log_id, key, created)），
+    // 同 key 会被去重（存储层只保留首次出现的 key），
     // 所以这里用 200 个不同 key 验证条数上限。
     expect(count($entries))->toBe(MetadataEntry::MAX_ENTRIES);
 });

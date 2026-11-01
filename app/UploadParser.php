@@ -9,7 +9,7 @@ class UploadParser
 {
     public const DEFAULT_MAX_FILES = 200;
     public const DEFAULT_MAX_TOTAL_BYTES = 20 * 1024 * 1024;
-    /** 与 MariaDB `log_files.name` VARCHAR(512) 及常见路径长度上限对齐 */
+    /** 与常见路径长度上限及存储实现的名称字段对齐 */
     public const MAX_NAME_LENGTH = 512;
 
     /** ZIP 流式解压的读取块大小（限制单个条目的峰值内存） */
@@ -30,8 +30,14 @@ class UploadParser
             return false;
         }
 
-        // 超长名称在 MariaDB 路径会触发 "Data too long" 500，这里统一提前拒绝
+        // 超长名称会触发存储字段上限，这里统一提前拒绝
         if (strlen($name) > self::MAX_NAME_LENGTH) {
+            return false;
+        }
+
+        // MongoDB BSON 字符串必须是合法 UTF-8；MariaDB utf8mb4 同样会拒绝
+        // 非法字节。提前拒绝可避免落库时变成 500。
+        if (!mb_check_encoding($name, 'UTF-8')) {
             return false;
         }
 
@@ -136,9 +142,8 @@ class UploadParser
     /**
      * 为同名条目生成不冲突的名称。
      *
-     * `log_files` 主键为 (log_id, name, created)，同名条目直接触发
-     * Duplicate entry 并把上传打成 500。这里按 `name` / `name (2)` /
-     * `name (3)` 递增，保留扩展名位置，行为可预期且便于客户端识别。
+     * 存储层按文件名唯一，同名条目会冲突并可能把上传打成 500。
+     * 这里按 `name` / `name (2)` / `name (3)` 递增，保留扩展名位置。
      *
      * @param array<string, true> $taken 已占用名称集合（引用传递，调用后写入新名称）
      */

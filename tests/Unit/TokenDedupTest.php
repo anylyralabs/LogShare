@@ -8,7 +8,7 @@ use Tests\Support\InMemoryStorage;
 /**
  * 去重命中时的删除凭证语义。
  *
- * 回归背景：`MariaDbStorage::Put()` 命中内容指纹时不写入新行，但 `Log::put()`
+ * 回归背景：`MongoStorage::Put()` 命中内容指纹时不写入新行，但 `Log::put()`
  * 仍会用本次请求的新 token 覆盖 Redis 缓存，第二个上传者因此取得删除凭证。
  */
 beforeEach(function () {
@@ -19,8 +19,8 @@ beforeEach(function () {
     $this->origData = $this->dataProp->getValue();
 
     $cfg = $this->origData;
-    $cfg['storage']['storageId'] = 's';
-    $cfg['storage']['storages']['s'] = [
+    $cfg['storage']['storageId'] = 'm';
+    $cfg['storage']['storages']['m'] = [
         'name' => 'InMemory',
         'class' => InMemoryStorage::class,
         'enabled' => true,

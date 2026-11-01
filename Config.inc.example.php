@@ -12,21 +12,40 @@ return [
     /* ─── Storage ─────────────────────────────────────────── */
     'storage' => [
         'storages' => [
-            's' => ['name' => 'MariaDB',     'class' => '\\App\\Storage\\MariaDbStorage',      'enabled' => true],
+            'm' => ['name' => 'MongoDB',     'class' => '\\App\\Storage\\MongoStorage',       'enabled' => true],
         ],
-        'storageId' => 's',
-        // 日志保留时长（秒）。MariaDB 后端按 created 的天级 RANGE 分区存储，
-        // 到期由 MariaDB Event cleanup_expired_logs 丢弃整日分区，
-        // 磁盘空间会被真正归还操作系统（DELETE 只会留下永不回收的空洞）。
-        // 修改后需执行 php scripts/sync_mariadb_events.php 并重启 mariadb-events 容器生效。
+        'storageId' => 'm',
+        // 日志保留时长（秒）。MongoDB 使用 created 上的 TTL 索引滚动过期；
+        // 修改后需重启 Hyperf（启动时会执行 scripts/init_mongodb.php 同步 TTL）。
         'storageTime' => 7 * 24 * 60 * 60,
         'uploadFiles' => [
             'maxFiles' => 200,
-            // 所有文件展开后的合计上限；不限制单个文件大小或行数
+            // 所有文件展开后的合计上限；不限制单个文件大小或行数。
+            // 内容在 MongoDB 中按 8 MiB 分块，避免触发 BSON 16 MiB 单文档限制。
             'maxTotalBytes' => 20 * 1024 * 1024,
             // 解压后的请求体安全上限，需覆盖 20 MiB 文件与 JSON/表单编码开销
             'maxRequestBodyBytes' => 32 * 1024 * 1024,
         ],
+    ],
+
+    /* ─── MongoDB ─────────────────────────────────────────── */
+    'mongo' => [
+        // 生产环境通过 MONGODB_URI 注入带认证的完整 URI；本地开发可直连无认证实例。
+        'url' => 'mongodb://127.0.0.1:27017',
+        'database' => 'logshare',
+        // MongoDB 8.0 且账号具备权限时，autoCompact 持续在后台压缩集合并回收磁盘。
+        // 7.x / 权限不足时由 MongoCompactProcess 周期性 compact 兜底。
+        'autoCompact' => true,
+        'freeSpaceTargetMB' => 20,
+        // 没有 autoCompact（MongoDB 7.x）时的兜底：进程内按间隔执行 compact。
+        // 默认 6 小时一次；首次等待 2 分钟，避免和启动流量争抢磁盘。
+        'compactionEnabled' => true,
+        'compactInitialDelay' => 120,
+        'compactInterval' => 6 * 60 * 60,
+        'serverSelectionTimeoutMs' => 5000,
+        'connectTimeoutMs' => 5000,
+        'socketTimeoutMs' => 120000,
+        'maxPoolSize' => 32,
     ],
 
     /* ─── Cache (Redis) ──────────────────────────────────── */

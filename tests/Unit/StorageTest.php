@@ -8,8 +8,8 @@ beforeEach(function () {
     $this->origData = $this->dataProp->getValue();
 
     $data = $this->origData;
-    $data['storage']['storageId'] = 's';
-    $data['storage']['storages']['s'] = [
+    $data['storage']['storageId'] = 'm';
+    $data['storage']['storages']['m'] = [
         'name' => 'InMemory',
         'class' => InMemoryStorage::class,
         'enabled' => true,

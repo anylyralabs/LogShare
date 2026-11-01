@@ -2,4 +2,6 @@
 
 declare(strict_types=1);
 
-return [];
+return [
+    \App\System\MongoCompactProcess::class,
+];

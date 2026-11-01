@@ -7,13 +7,13 @@ namespace Tests\Support;
 use App\Data\MetadataEntry;
 use App\Data\Token;
 use App\Id;
-use App\Storage\MariaDbStorage;
+use App\Data\Fingerprint;
 use App\Storage\StorageInterface;
 
 /**
  * 无外部依赖的内存存储，用于单元测试。
  *
- * 生产环境只保留 MariaDB 后端；该实现仅避免测试必须启动数据库。
+ * 生产环境只保留 MongoDB 后端；该实现仅避免测试必须启动数据库。
  */
 final class InMemoryStorage implements StorageInterface
 {
@@ -48,10 +48,10 @@ final class InMemoryStorage implements StorageInterface
             ];
         }
 
-        $fingerprint = MariaDbStorage::fingerprint($normalizedFiles, $normalizedSource);
+        $fingerprint = Fingerprint::compute($normalizedFiles, $normalizedSource);
         if (isset(self::$fingerprints[$fingerprint], self::$rows[self::$fingerprints[$fingerprint]])) {
             $created = false;
-            return Id::fromRaw('s', self::$fingerprints[$fingerprint]);
+            return Id::fromRaw(self::storageId(), self::$fingerprints[$fingerprint]);
         }
 
         $created = true;
@@ -65,7 +65,7 @@ final class InMemoryStorage implements StorageInterface
             'files' => $normalizedFiles,
         ];
 
-        return Id::fromRaw('s', $rawId);
+        return Id::fromRaw(self::storageId(), $rawId);
     }
 
     public static function Get(Id $id, bool $includeContent = true): ?array
@@ -119,6 +119,12 @@ final class InMemoryStorage implements StorageInterface
         }
 
         return true;
+    }
+
+    private static function storageId(): string
+    {
+        $storage = \App\Config::Get('storage');
+        return (string) ($storage['storageId'] ?? 'm');
     }
 
     public static function UpgradeToken(Id $id, string $normalizedToken): bool

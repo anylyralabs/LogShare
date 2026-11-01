@@ -227,7 +227,7 @@ class Log
                         'files' => $this->files,
                     ]);
                 } catch (\Exception $e) {
-                    \App\Syslog::error('Redis', '缓存写入失败: ' . $e->getMessage() . '，已降级到 MariaDB');
+                    \App\Syslog::error('Redis', '缓存写入失败: ' . $e->getMessage() . '，已降级到主存储');
                 }
             }
         }
@@ -510,9 +510,8 @@ class Log
 
         $storage::Renew($this->id);
 
-        // 读路径绝不做分区维护：CleanupExpired() 会执行 ALTER TABLE ADD/DROP
-        // PARTITION，需要元数据锁，可能阻塞同表上传并长时间占用连接池。
-        // 过期回收由 mariadb-events 定时事件负责。
+        // 过期回收由 MongoDB TTL 索引负责；续期同时刷新父文档与内容分块的
+        // created，读取路径不执行任何 DDL 或清理任务。
 
         if ($this->isCacheEnabled()) {
             try {
@@ -526,7 +525,7 @@ class Log
     }
 
     /**
-     * Delete the log from storage (both Redis cache and MariaDB).
+     * Delete the log from storage (both Redis cache and primary storage).
      *
      * @return bool Success
      */

@@ -37,8 +37,7 @@ class MetadataEntry implements \JsonSerializable
                 continue;
             }
 
-            // `log_metadata` 主键为 (log_id, key, created)：重复 key 会直接
-            // 触发 Duplicate entry 并把上传打成 500。以首次出现为准，后者丢弃。
+            // 存储层只保留每个 key 的首次出现，重复 key 直接丢弃。
             $key = $entry->getKey();
             if ($key !== null && isset($seen[$key])) {
                 continue;
@@ -142,7 +141,7 @@ class MetadataEntry implements \JsonSerializable
         }
         if (mb_strlen($encodedValue, 'UTF-8') > static::MAX_VALUE_LENGTH) {
             // 编码后超长的复合值按字符截断为展示用字符串；截断结果不再是
-            // 合法 JSON，仅用于展示（MariaDB 读取端的类型还原对此原样放行）
+            // 合法 JSON，仅用于展示（读取端的类型还原对此原样放行）
             $encodedValue = mb_substr($encodedValue, 0, static::MAX_VALUE_LENGTH, 'UTF-8');
         }
         $this->value = $encodedValue;

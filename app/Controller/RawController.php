@@ -35,7 +35,7 @@ class RawController extends AbstractController
 
         if ($filename !== null) {
             // Hyperf 不会解码路由参数；浏览器对非 ASCII 文件名必然发送百分号编码，需手动解码
-            // 解码后仅用于 log_files.name 精确匹配（数据库列），无路径遍历风险
+            // 解码后仅用于日志文件名精确匹配，无路径遍历风险
             $filename = rawurldecode($filename);
             $content = $log->getFile($filename);
             if ($content === null) {

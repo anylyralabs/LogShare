@@ -20,16 +20,11 @@ jobs:
         php-version: ['8.4', '8.5']
 
     services:
-      mariadb:
-        image: mariadb:11
-        env:
-          MARIADB_DATABASE: logshare
-          MARIADB_USER: logshare
-          MARIADB_PASSWORD: logshare
-          MARIADB_ROOT_PASSWORD: root
-        ports: [3306:3306]
+      mongo:
+        image: mongo:7.0
+        ports: [27017:27017]
         options: >-
-          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-cmd="mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok' | grep -q 1"
           --health-interval=10s --health-timeout=5s --health-retries=3
 
       redis:
@@ -46,7 +41,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php-version }}
-          extensions: mbstring, json, zlib, pdo_mysql, redis, pcntl, posix, sockets, swoole, brotli
+          extensions: mbstring, json, zlib, mongodb, redis, pcntl, posix, sockets, swoole, brotli
           coverage: pcov
           tools: composer:v2
 
@@ -63,25 +58,18 @@ jobs:
       - name: Copy Config
         run: cp Config.inc.example.php Config.inc.php
 
-      - name: Install MariaDB client
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mariadb-client
-
-      - name: Initialize MariaDB Schema & Events
-        run: |
-          # 必须用 mysql/mariadb 客户端：mariadb-events.sql 含 `DELIMITER $$`
-          # 存储过程，PDO::exec() 不支持客户端指令，会直接 ERROR 1064。
-          # 与 CNB 共用同一份初始化脚本（它会自己先生成 events.sql）。
-          sh scripts/ci_init_mariadb.sh
+      - name: Initialize MongoDB Indexes, TTL & AutoCompact
+        run: php scripts/init_mongodb.php
+        env:
+          MONGODB_URI: mongodb://127.0.0.1:27017
+          MONGODB_DATABASE: logshare
 
       - name: Run Tests
         if: matrix.php-version != '8.4'
         run: composer test
         env:
-          DB_HOST: 127.0.0.1
-          DB_PORT: 3306
-          DB_DATABASE: logshare
-          DB_USERNAME: logshare
-          DB_PASSWORD: logshare
+          MONGODB_URI: mongodb://127.0.0.1:27017
+          MONGODB_DATABASE: logshare
           REDIS_HOST: 127.0.0.1
           REDIS_PORT: 6379
 
@@ -89,11 +77,8 @@ jobs:
         if: matrix.php-version == '8.4'
         run: composer test:coverage
         env:
-          DB_HOST: 127.0.0.1
-          DB_PORT: 3306
-          DB_DATABASE: logshare
-          DB_USERNAME: logshare
-          DB_PASSWORD: logshare
+          MONGODB_URI: mongodb://127.0.0.1:27017
+          MONGODB_DATABASE: logshare
           REDIS_HOST: 127.0.0.1
           REDIS_PORT: 6379
 
@@ -123,7 +108,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.5'
-          extensions: mbstring, json, zlib
+          extensions: mbstring, json, zlib, mongodb
           tools: composer:v2
 
       - name: Cache Composer
@@ -153,7 +138,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.5'
-          extensions: mbstring, json, zlib
+          extensions: mbstring, json, zlib, mongodb
           tools: composer:v2
 
       - name: Cache Composer
@@ -177,16 +162,11 @@ jobs:
     runs-on: ubuntu-latest
 
     services:
-      mariadb:
-        image: mariadb:11
-        env:
-          MARIADB_DATABASE: logshare
-          MARIADB_USER: logshare
-          MARIADB_PASSWORD: logshare
-          MARIADB_ROOT_PASSWORD: root
-        ports: [3306:3306]
+      mongo:
+        image: mongo:7.0
+        ports: [27017:27017]
         options: >-
-          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-cmd="mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok' | grep -q 1"
           --health-interval=10s --health-timeout=5s --health-retries=3
 
       redis:
@@ -203,7 +183,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.5'
-          extensions: mbstring, json, zlib, pdo_mysql, redis, pcntl, posix, sockets, swoole
+          extensions: mbstring, json, zlib, mongodb, redis, pcntl, posix, sockets, swoole
           tools: composer:v2
 
       - name: Cache Composer
@@ -219,13 +199,11 @@ jobs:
       - name: Copy Config
         run: cp Config.inc.example.php Config.inc.php
 
-      - name: Initialize MariaDB Schema
-        run: |
-          php -r '
-          $pdo = new PDO("mysql:host=127.0.0.1;dbname=logshare", "logshare", "logshare", [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-          $pdo->exec(file_get_contents("docker/mariadb-init.sql"));
-          echo "schema initialized\n";
-          '
+      - name: Initialize MongoDB Indexes, TTL & AutoCompact
+        run: php scripts/init_mongodb.php
+        env:
+          MONGODB_URI: mongodb://127.0.0.1:27017
+          MONGODB_DATABASE: logshare
 
       - name: Verify Framework Boots
         run: php bin/hyperf.php list
@@ -241,11 +219,8 @@ jobs:
           }
           kill $(cat runtime/hyperf.pid)
         env:
-          DB_HOST: 127.0.0.1
-          DB_PORT: 3306
-          DB_DATABASE: logshare
-          DB_USERNAME: logshare
-          DB_PASSWORD: logshare
+          MONGODB_URI: mongodb://127.0.0.1:27017
+          MONGODB_DATABASE: logshare
           REDIS_HOST: 127.0.0.1
           REDIS_PORT: 6379
 
@@ -254,11 +229,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: [test, static-analysis, architecture, hyperf-boot]
     if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    # compose.yaml 的必填变量（hyperf/redis/mariadb）在 build 插值阶段即校验，
+    # compose.yaml 的必填变量（hyperf/redis/mongo）在 build 插值阶段即校验，
     # CI 仅做构建与冒烟测试，使用占位密码即可
     env:
-      MARIADB_PASSWORD: ci-placeholder
-      MARIADB_ROOT_PASSWORD: ci-placeholder
+      MONGO_ROOT_PASSWORD: ci-placeholder
+      MONGO_PASSWORD: ci-placeholder
       REDIS_PASSWORD: ci-placeholder
     steps:
       - name: Checkout
@@ -280,7 +255,6 @@ jobs:
           # 否则 /security/unban 一律 404，运行时解封通道就没有被真正验证过
           echo "OPENLITEWAF_ADMIN_TOKEN=ci-openlitewaf-token" >> .env
           cp .env docker/.env
-          php scripts/sync_mariadb_events.php
 
       - name: Generate Self-Signed Certificate for Smoke Test
         # nginx 443 与 healthcheck 需要证书文件；CI 上 docker/certs/ 为空。

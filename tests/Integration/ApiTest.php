@@ -4,14 +4,15 @@ declare(strict_types=1);
 
 namespace Tests\Integration;
 
-use Hyperf\DbConnection\Db;
+use App\Data\Token;
+use App\Storage\MongoStorage;
 use Tests\HttpTestCase;
 
 /**
  * 真实 HTTP 集成测试：请求走完整 CORS → RateLimit → 路由 → 控制器链路。
  *
- * 存储链路用例（上传/读取/删除）依赖 MariaDB，不可用时自动跳过
- * （本地开发环境无 mariadbd；CI 的 test job 会启动 MariaDB 服务全量执行）。
+ * 存储链路用例（上传/读取/删除）依赖 MongoDB，不可用时自动跳过
+ * （CI 的 test job 会启动 MongoDB 服务全量执行）。
  */
 class ApiTest extends HttpTestCase
 {
@@ -70,10 +71,8 @@ class ApiTest extends HttpTestCase
 
     public function testUploadReadDeleteRoundTrip(): void
     {
-        try {
-            Db::statement('SELECT 1');
-        } catch (\Throwable $e) {
-            $this->markTestSkipped('MariaDB is not available: ' . $e->getMessage());
+        if (!MongoStorage::ping()) {
+            $this->markTestSkipped('MongoDB is not available');
         }
 
         $content = "[12:34:56] [Server thread/INFO]: ApiTest round trip\n";
@@ -104,10 +103,8 @@ class ApiTest extends HttpTestCase
 
     public function testMultiFileListAndPerFileAccess(): void
     {
-        try {
-            Db::statement('SELECT 1');
-        } catch (\Throwable $e) {
-            $this->markTestSkipped('MariaDB is not available: ' . $e->getMessage());
+        if (!MongoStorage::ping()) {
+            $this->markTestSkipped('MongoDB is not available');
         }
 
         $marker = uniqid('multi-', true);
@@ -156,10 +153,8 @@ class ApiTest extends HttpTestCase
 
     public function testUploadResponseTokenCannotBeLeakedFromStorage(): void
     {
-        try {
-            Db::statement('SELECT 1');
-        } catch (\Throwable $e) {
-            $this->markTestSkipped('MariaDB is not available: ' . $e->getMessage());
+        if (!MongoStorage::ping()) {
+            $this->markTestSkipped('MongoDB is not available');
         }
 
         // 内容必须唯一：否则会命中去重指纹、复用上一轮遗留的 ID 与旧 token
@@ -172,22 +167,20 @@ class ApiTest extends HttpTestCase
         $token = (string) $create->json('token');
 
         // 存储中落库的是带前缀的 SHA-256，而非原文 token
-        $row = Db::table('logs')->where('id', substr($id, 1))->first();
-        $this->assertNotNull($row);
-        $this->assertNotSame($token, $row->token);
-        $this->assertSame(\App\Data\Token::hashValue($token), $row->token);
-        $this->assertStringStartsWith(\App\Data\Token::HASH_PREFIX, (string) $row->token);
+        $stored = MongoStorage::Get(new \App\Id($id));
+        $this->assertNotNull($stored);
+        $this->assertNotSame($token, $stored['token']);
+        $this->assertSame(Token::hashValue($token), $stored['token']);
+        $this->assertStringStartsWith(Token::HASH_PREFIX, (string) $stored['token']);
 
         // 库里的值本身不能作为删除凭证
-        $leakAttempt = $this->delete("/v1/log/{$id}", [], ['Authorization' => 'Bearer ' . $row->token]);
+        $leakAttempt = $this->delete("/v1/log/{$id}", [], ['Authorization' => 'Bearer ' . $stored['token']]);
         $this->assertSame(400, $leakAttempt->getStatusCode());
 
         // 原文 token 仍可正常通过删除鉴权（哈希比对路径）
         $delete = $this->delete("/v1/log/{$id}", [], ['Authorization' => 'Bearer ' . $token]);
         $delete->assertSuccessful();
-
-        Db::table('log_metadata')->where('log_id', substr($id, 1))->delete();
-        Db::table('log_files')->where('log_id', substr($id, 1))->delete();
+        $this->assertNull(MongoStorage::Get(new \App\Id($id)));
     }
 
 }

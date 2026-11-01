@@ -27,9 +27,11 @@ return [
         'max_coroutine' => 100000,
         'open_http2_protocol' => true,
         'max_request' => 2000,
-        'socket_buffer_size' => 16 * 1024 * 1024,
-        'buffer_output_size' => 16 * 1024 * 1024,
-        'package_max_length' => 16 * 1024 * 1024,
+        // 上传请求体上限 32 MiB、单文件上限 20 MiB；Swoole 的包/输出缓冲区
+        // 必须留出 JSON/表单与响应头开销，否则大文件会在框架层被 413/截断。
+        'socket_buffer_size' => 36 * 1024 * 1024,
+        'buffer_output_size' => 36 * 1024 * 1024,
+        'package_max_length' => 36 * 1024 * 1024,
         'http_compression' => true,
         'http_compression_level' => 6,
         'compression_min_length' => 1024,

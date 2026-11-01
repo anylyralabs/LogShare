@@ -9,10 +9,25 @@ use App\Config;
  */
 beforeEach(function () {
     $this->origData = (new ReflectionClass(Config::class))->getProperty('data')->getValue();
+    $this->origMongoUri = getenv('MONGODB_URI');
+    $this->origMongoDatabase = getenv('MONGODB_DATABASE');
+    // 配置校验用例要验证 in-config 的非法值，不能被 CI 注入的 MONGODB_* 环境变量覆盖。
+    putenv('MONGODB_URI');
+    putenv('MONGODB_DATABASE');
 });
 
 afterEach(function () {
     (new ReflectionClass(Config::class))->getProperty('data')->setValue(null, $this->origData);
+    if ($this->origMongoUri === false) {
+        putenv('MONGODB_URI');
+    } else {
+        putenv('MONGODB_URI=' . $this->origMongoUri);
+    }
+    if ($this->origMongoDatabase === false) {
+        putenv('MONGODB_DATABASE');
+    } else {
+        putenv('MONGODB_DATABASE=' . $this->origMongoDatabase);
+    }
 });
 
 function loadConfigArray(array $overrides): void
@@ -58,6 +73,14 @@ test('storage class must implement StorageInterface', function () {
         ],
     ]);
 })->throws(InvalidArgumentException::class, 'must implement');
+
+test('mongo uri and database are validated', function () {
+    loadConfigArray(['mongo' => ['url' => 'http://127.0.0.1:27017']]);
+})->throws(InvalidArgumentException::class, 'mongodb://');
+
+test('mongo database must not be empty', function () {
+    loadConfigArray(['mongo' => ['database' => '']]);
+})->throws(InvalidArgumentException::class, 'mongo.database is required');
 
 test('cache class must implement CacheInterface', function () {
     loadConfigArray(['cache' => ['cacheId' => \App\Data\Token::class]]);

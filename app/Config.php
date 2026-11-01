@@ -58,6 +58,8 @@ class Config
      *  - REDIS_PORT         → cache.redis.port
      *  - REDIS_TIMEOUT      → cache.redis.timeout
      *  - REDIS_PASSWORD     → cache.redis.password
+     *  - MONGODB_URI        → mongo.url
+     *  - MONGODB_DATABASE   → mongo.database
      *
      * @param array<string, mixed> $data Config array by reference
      * @return void
@@ -66,6 +68,12 @@ class Config
     {
         if (($storageTime = getenv('STORAGE_TIME')) !== false && ctype_digit($storageTime) && (int) $storageTime > 0) {
             $data['storage']['storageTime'] = (int) $storageTime;
+        }
+        if (($mongoUri = getenv('MONGODB_URI')) !== false && $mongoUri !== '') {
+            $data['mongo']['url'] = $mongoUri;
+        }
+        if (($mongoDatabase = getenv('MONGODB_DATABASE')) !== false && $mongoDatabase !== '') {
+            $data['mongo']['database'] = $mongoDatabase;
         }
         if ($host = getenv('REDIS_HOST')) {
             $data['cache']['redis']['host'] = $host;
@@ -137,6 +145,17 @@ class Config
                     throw new \InvalidArgumentException("storage.storages.{$storageKey}.class must implement App\\Storage\\StorageInterface: {$class}");
                 }
             }
+        }
+
+        $mongo = $data['mongo'] ?? [];
+        if (!is_array($mongo) || trim((string) ($mongo['url'] ?? '')) === '') {
+            throw new \InvalidArgumentException('mongo.url is required');
+        }
+        if (!str_starts_with((string) $mongo['url'], 'mongodb://') && !str_starts_with((string) $mongo['url'], 'mongodb+srv://')) {
+            throw new \InvalidArgumentException('mongo.url must start with mongodb:// or mongodb+srv://');
+        }
+        if (trim((string) ($mongo['database'] ?? '')) === '') {
+            throw new \InvalidArgumentException('mongo.database is required');
         }
 
         $cacheClass = $data['cache']['cacheId'] ?? null;

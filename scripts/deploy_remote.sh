@@ -9,7 +9,6 @@ git status -s
 echo "=== 2. 拉取最新代码与子模块 ==="
 # 备份生产特定配置文件
 cp docker/nginx/default.conf /tmp/prod_nginx_default.conf || true
-cp docker/mariadb-events.sql /tmp/prod_mariadb_events.sql || true
 
 git pull --recurse-submodules
 
@@ -17,16 +16,13 @@ git pull --recurse-submodules
 if [ -f /tmp/prod_nginx_default.conf ]; then
     cp /tmp/prod_nginx_default.conf docker/nginx/default.conf
 fi
-if [ -f /tmp/prod_mariadb_events.sql ]; then
-    cp /tmp/prod_mariadb_events.sql docker/mariadb-events.sql
-fi
 
 echo "=== 3. 清理宿主机陈旧注解缓存 ==="
 docker run --rm -v /home/YanSui/LogShare/runtime:/runtime alpine rm -rf /runtime/container || true
 
 echo "=== 4. 构建并重启 Hyperf 容器 ==="
 docker compose --env-file .env -f docker/compose.yaml build --no-cache hyperf
-docker compose --env-file .env -f docker/compose.yaml up -d --force-recreate hyperf
+docker compose --env-file .env -f docker/compose.yaml up -d --remove-orphans --force-recreate hyperf
 
 echo "=== 5. 等待 Hyperf 就绪并检查运行状态 ==="
 sleep 8
