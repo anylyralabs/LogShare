@@ -11,6 +11,7 @@ use App\Queue\Handler\DeobfuscateHandler;
 use App\Queue\Handler\SecurityAuditHandler;
 use App\Queue\QueueEvent;
 use App\System\SecurityService;
+use Tests\Support\InMemoryStorage;
 use Hyperf\HttpMessage\Server\Request;
 use Hyperf\HttpMessage\Server\Response;
 
@@ -19,13 +20,13 @@ beforeEach(function () {
     $this->dataProp = $this->configRef->getProperty('data');
     $this->origData = $this->dataProp->getValue();
 
-    $this->tmpDir = CORE_PATH . '/tmp/event_queue_test_' . uniqid();
-    mkdir($this->tmpDir, 0777, true);
-
     $cfg = $this->origData;
-    $cfg['filesystem']['path'] = substr($this->tmpDir, strlen(CORE_PATH)) . '/';
-    $cfg['storage']['storageId'] = 'f';
-    $cfg['storage']['storages']['f']['enabled'] = true;
+    $cfg['storage']['storageId'] = 's';
+    $cfg['storage']['storages']['s'] = [
+        'name' => 'InMemory',
+        'class' => InMemoryStorage::class,
+        'enabled' => true,
+    ];
     $cfg['security']['contentRules']['enabled'] = true;
     $cfg['security']['contentRules']['keywords'] = ['async_banned_keyword'];
     $cfg['security']['contentRules']['patterns'] = ['/violation_async_pattern_\d+/'];
@@ -37,6 +38,7 @@ beforeEach(function () {
         'asyncSecurityAudit' => true,
     ];
     $this->dataProp->setValue(null, $cfg);
+    InMemoryStorage::reset();
 
     EventQueue::resetListeners();
 
@@ -57,14 +59,7 @@ beforeEach(function () {
 });
 
 afterEach(function () {
-    if (is_dir($this->tmpDir)) {
-        foreach (glob($this->tmpDir . '/*') ?: [] as $file) {
-            if (is_file($file)) {
-                unlink($file);
-            }
-        }
-        rmdir($this->tmpDir);
-    }
+    InMemoryStorage::reset();
     $rulesFile = CORE_PATH . '/runtime/content_reject_rules.json';
     if (is_file($rulesFile)) {
         @unlink($rulesFile);

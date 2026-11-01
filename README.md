@@ -4,13 +4,13 @@ LogShare 是一个面向 Minecraft 与 Hytale 等沙盒游戏的高性能日志�
 
 AI 智能诊断已从本仓库剥离，由外部服务提供；本仓库保留日志上传、分享、Codex 本地结构化解析，以及异步安全审核与 SpinYarn 反混淆流水线。`/v1/ai/*`、`/rag` 及相关管理接口不再提供，统一返回 404。
 
-服务端基于 Hyperf 3.2 框架与 Swoole 6.2 高性能协程常驻进程引擎，原生要求 PHP 8.4 及以上。存储后端支持 MariaDB 与文件系统二选一，Redis 作为缓存、限流与事件流消息总线。当前版本 `v1.8.4`，更新记录见 [`CHANGELOG.md`](CHANGELOG.md)。
+服务端基于 Hyperf 3.2 框架与 Swoole 6.2 高性能协程常驻进程引擎，原生要求 PHP 8.4 及以上。存储后端使用 MariaDB，Redis 作为缓存、限流与事件流消息总线。当前版本 `v1.8.4`，更新记录见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ## 环境要求
 
 - PHP 8.4+，扩展 ext-json、ext-zlib、ext-mbstring、ext-pdo_mysql
 - Swoole 6.2（常驻进程运行时）
-- MariaDB 或文件系统（主要存储，二选一）
+- MariaDB（主存储）
 - Redis（可选，用于缓存、限流与统一异步事件队列；缺少 ext-redis 时以内置 mock 优雅降级）
 - SpinYarn 扩展（可选，原生 Rust 编写，用于混淆堆栈反解；缺失时日志原样透传）
 
@@ -36,7 +36,7 @@ php scripts/widen_token_column.php
 
 | 配置段 | 说明 |
 |---|---|
-| `storage` | 存储后端（MariaDB 与文件系统二选一）、日志保留时间（TTL）、多文件与 ZIP 上传限制（`uploadFiles`） |
+| `storage` | MariaDB 存储、日志保留时间（TTL）、多文件与 ZIP 上传限制（`uploadFiles`） |
 | `cache` | Redis 缓存：开关、TTL、大小限制与连接信息 |
 | `filter` | 上传前的预处理过滤链（脱敏规则），按配置顺序执行 |
 | `id` | 日志 ID 的字符集与长度（修改会破坏已有 ID） |
@@ -139,7 +139,7 @@ app/                      核心类库（App\ 命名空间）
 ├── Process/              常驻事件消费者进程（EventQueueConsumer）
 ├── Queue/                统一日志异步事件队列（EventQueue、QueueEvent、DeadLetterQueue、Handler/）
 ├── ApiResponse.php       统一响应结构封装
-├── Storage/              持久化存储后端（MariaDbStorage、FilesystemStorage）
+├── Storage/              持久化存储后端（MariaDbStorage）
 ├── System/               系统核心服务（SecurityService、LogPartitionManager）
 ├── Telemetry/            客户端遥测统计服务
 ├── ApiError.php          API 业务异常（ApiExceptionHandler 统一渲染）
@@ -164,7 +164,7 @@ docs/                     历史过程文档与设计规划
 
 ### 请求处理流程
 
-1. **上传**：`POST /v1/log` → RequestParser 解压请求体 → UploadParser 校验并展开 ZIP → 过滤链快速脱敏 → 执行轻量 Codex 特征分析 → 写入 MariaDB / 文件系统与 Redis 缓存 → **即刻派发 `EVENT_LOG_UPLOADED` 事件** → 毫秒级向客户端返回 200 响应。
+1. **上传**：`POST /v1/log` → RequestParser 解压请求体 → UploadParser 校验并展开 ZIP → 过滤链快速脱敏 → 执行轻量 Codex 特征分析 → 写入 MariaDB 与 Redis 缓存 → **即刻派发 `EVENT_LOG_UPLOADED` 事件** → 毫秒级向客户端返回 200 响应。
 2. **异步流水线处理**：常驻进程 `EventQueueConsumer` 拉取事件 → 执行 `SecurityAuditHandler`（主正文与全部附件敏感规则检测，若违规即刻物理清除日志并通过 Syslog 记录原因、封禁恶意 IP，阻断后续流转）→ 执行 `DeobfuscateHandler`（调用 SpinYarn 原生反混淆并原子回写存储与刷新缓存）→ 异常自动重试，耗尽转入死信流 `events:log:dead`。
 3. **读取**：`GET /v1/raw/{id}`（或子文件路径）→ Redis 缓存查询（如启用）→ 未命中时回源存储 → TTL 续期。
 4. **分析**：`GET /v1/insights/{id}` → 加载日志 → Detective 检测服务端类型与版本 → Codex 引擎解析 → 格式化输出。
@@ -172,7 +172,7 @@ docs/                     历史过程文档与设计规划
 
 ### ID 编码
 
-日志 ID 为 7 位字符，首字符编码存储后端类型：`s` 表示 MariaDB，`f` 表示文件系统；其余 6 位为随机字符。字符集与长度可配置，但修改会破坏所有已有 ID，配置项 `id.characters` 与 `id.length` 不应改动。
+日志 ID 为 7 位字符，首字符编码存储标识（当前仅 MariaDB）；其余 6 位为随机字符。字符集与长度可配置，但修改会破坏所有已有 ID，配置项 `id.characters` 与 `id.length` 不应改动。
 
 ### 限速
 

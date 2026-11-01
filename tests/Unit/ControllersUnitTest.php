@@ -17,6 +17,7 @@ use App\Log;
 use Hyperf\HttpServer\Contract\RequestInterface;
 use Mockery;
 use ReflectionClass;
+use Tests\Support\InMemoryStorage;
 
 function instantiateController(string $class, ?RequestInterface $request = null): object
 {
@@ -43,30 +44,20 @@ beforeEach(function () {
     $this->origData = $this->dataProp->getValue();
 
     $data = $this->origData;
-    $data['storage']['storages']['f'] = [
-        'name' => 'Filesystem',
-        'class' => '\\App\\Storage\\FilesystemStorage',
+    $data['storage']['storages']['s'] = [
+        'name' => 'InMemory',
+        'class' => InMemoryStorage::class,
         'enabled' => true,
     ];
-    $data['storage']['storageId'] = 'f';
+    $data['storage']['storageId'] = 's';
     $data['cache']['enabled'] = false;
-
-    $this->tmpDir = CORE_PATH . '/tmp/logshare_ctrl_test_' . uniqid();
-    mkdir($this->tmpDir, 0777, true);
-    $data['filesystem']['path'] = substr($this->tmpDir, strlen(CORE_PATH)) . '/';
     $this->dataProp->setValue(null, $data);
+    InMemoryStorage::reset();
 });
 
 afterEach(function () {
     $this->dataProp->setValue(null, $this->origData);
-    if (is_dir($this->tmpDir)) {
-        foreach (glob($this->tmpDir . '/*') ?: [] as $file) {
-            if (is_file($file)) {
-                unlink($file);
-            }
-        }
-        rmdir($this->tmpDir);
-    }
+    InMemoryStorage::reset();
 });
 
 test('LimitsController returns storage limits json', function () {

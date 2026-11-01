@@ -289,7 +289,7 @@ class MariaDbStorage implements StorageInterface
 
     /**
      * 还原 metadata 值的原始类型：写入端对非字符串值做了 json_encode，
-     * 读取端做对称解码，使 MariaDB 后端与 Filesystem 后端（jsonSerialize
+     * 读取端做对称解码，使存储层（jsonSerialize
      * 保留类型）行为一致。普通字符串解码必然失败而原样返回；恰为合法
      * JSON 标量（如 "true"）的用户原始字符串会被还原成对应类型，此歧义
      * 换取两端类型一致性。

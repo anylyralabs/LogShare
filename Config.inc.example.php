@@ -103,11 +103,6 @@ return [
         'privacy' => 'https://aternos.gmbh/en/mclogs/privacy',
     ],
 
-    /* ─── Filesystem ───────────────────────────────────────── */
-    'filesystem' => [
-        'path' => '/storage/logs/',
-    ],
-
     /* ─── SpinYarn（反混淆 PHP 扩展）────────────────────── */
     'spinyarn' => [
         // Yarn/Vanilla 映射目录，相对项目根 ./mappings。

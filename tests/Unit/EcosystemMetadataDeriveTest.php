@@ -5,7 +5,7 @@ use App\Log;
 
 /**
  * 复刻 put() 的调用顺序：先 analyse() 再 deriveEcosystemMetadata()，但不落库，
- * 避免测试依赖 MariaDB / 文件系统存储后端。
+ * 避免测试依赖 MariaDB / 内存存储后端。
  *
  * 返回 [key, value] 配对列表而非映射，以便断言「同一键不会被追加两次」。
  *

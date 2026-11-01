@@ -1,12 +1,12 @@
 # LogShare — Agent Guide
 
-面向 Minecraft / Hytale 的日志分享与本地 Codex 解析平台；AI 智能诊断已外包给外部服务。仓库主体是 PHP 后端、边缘 Lua 与 Docker 配置，没有前端构建。技术栈：PHP 8.4+ / Hyperf 3.2 / Swoole 6.2 常驻协程、MariaDB 或文件系统、Redis（可选）。完整目录树与用户文档见 `README.md`；API 契约以 `API.md`、`openapi.yaml`、`postman_collection.json` 为准。
+面向 Minecraft / Hytale 的日志分享与本地 Codex 解析平台；AI 智能诊断已外包给外部服务。仓库主体是 PHP 后端、边缘 Lua 与 Docker 配置，没有前端构建。技术栈：PHP 8.4+ / Hyperf 3.2 / Swoole 6.2 常驻协程、MariaDB、Redis（可选）。完整目录树与用户文档见 `README.md`；API 契约以 `API.md`、`openapi.yaml`、`postman_collection.json` 为准。
 
 ## 入口与结构
 
 - `bin/hyperf.php`：CLI 与服务入口；`core.php`：引导并加载 `Config.inc.php`；PSR-4 将 `App\` 映射到 `app/`。
 - HTTP 监听 `0.0.0.0:9501`（`config/autoload/server.php`）。控制器使用 Hyperf 注解路由，前缀 `/{version:v?1}` 同时匹配已弃用的 `/1` 与 `/v1`。
-- 存储由 `storage.storageId` 选择：`s` = MariaDB，`f` = 文件系统；日志 ID 首字符即存储标识。Redis 不是硬依赖，缺失时缓存与队列会降级。
+- 存储后端固定为 MariaDB（`storage.storageId` = `s`）；日志 ID 首字符为存储标识。Redis 不是硬依赖，缺失时缓存与队列会降级。
 - `OpenLiteWaf/`、`OpenLiteStats/` 是独立仓库的 git submodule（`cnb.cool/MornZe-Dev/*`），有自己的测试与发布流程；改动需在各自仓库提交，再回主仓更新指针。
 - 参考文档：`OpenLiteWaf/README.md`、`docs/`、`CHANGELOG.md`；`LOCAL_DEV_NOTES.md` 仅本地、被 `.git/info/exclude` 排除，永不提交。
 
@@ -38,7 +38,7 @@ php vendor/bin/pest --filter=TestName
 
 ## 存储 / ID
 
-- 日志 ID 固定 7 位：首字符 `s`（MariaDB）或 `f`（文件系统）+ 6 位随机。不要改 `id.characters` 或 `id.length`，已有 ID 全依赖它们。
+- 日志 ID 固定 7 位：首字符为存储标识（当前仅 MariaDB）+ 6 位随机。不要改 `id.characters` 或 `id.length`，已有 ID 全依赖它们。
 - 上传限制在落库前强制执行：10 MB / 50,000 行，最多 200 个文件、合计 12 MB；ZIP 必须继续防路径穿越与膨胀炸弹。
 - `logs` / `log_files` / `log_metadata` 按 `created` 做天级 RANGE 分区，必须保留 `p_future` 兜底。分区表不能有外键，级联删除由 `MariaDbStorage` 显式完成（先子表后父表）；所有唯一键都必须包含 `created`；`Renew()` 必须同步子表 `created`，否则父表分区丢弃后会留下永久孤儿行。
 - 过期清理只 `DROP PARTITION`。运行期绝不重建历史分区（会与幸存分区重名，ERROR 1517）；判断历史区间是否已铺过，用「最靠近今天的历史分区」而非分区计数；SQL 里 `PARTITION_DESCRIPTION` 必须 `CAST(... AS SIGNED)`，否则负 cutoff 静默失效；DROP 必须逐个执行（`information_schema` 陈旧视图会拼出已删分区名，ERROR 1064）。

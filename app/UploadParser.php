@@ -9,7 +9,7 @@ class UploadParser
 {
     public const DEFAULT_MAX_FILES = 200;
     public const DEFAULT_MAX_TOTAL_BYTES = 12 * 1024 * 1024;
-    /** 与 MariaDB `log_files.name` VARCHAR(512) 及常见文件系统上限对齐 */
+    /** 与 MariaDB `log_files.name` VARCHAR(512) 及常见路径长度上限对齐 */
     public const MAX_NAME_LENGTH = 512;
 
     /** ZIP 流式解压的读取块大小（限制单个条目的峰值内存） */

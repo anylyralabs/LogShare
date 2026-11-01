@@ -489,7 +489,7 @@ class Log
             \App\Syslog::error('Log', 'Codex header analysis during put failed: ' . $e->getMessage());
         }
         $plainToken = $token ?? new Token();
-        // 存储层（MariaDB / 文件系统 / Redis 缓存）只落带前缀的 SHA-256；
+        // 存储层（MariaDB / Redis 缓存）只落带前缀的 SHA-256；
         // 上传响应通过调用方持有的 $token 原对象返回原文。
         $this->token = new Token(Token::hashValue((string) $plainToken->get()));
         $this->metadata = $this->deriveEcosystemMetadata($metadata);
