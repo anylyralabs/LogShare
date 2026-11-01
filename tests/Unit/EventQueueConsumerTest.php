@@ -52,7 +52,6 @@ function processConsumerEntry(string $stream, string $group, string $id, array $
     $ref = new ReflectionClass(EventQueueConsumer::class);
     $consumer = $ref->newInstanceWithoutConstructor();
     $method = $ref->getMethod('processEntry');
-    $method->setAccessible(true);
     $method->invoke($consumer, $stream, $group, $id, $fields);
 }
 

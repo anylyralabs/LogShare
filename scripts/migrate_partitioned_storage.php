@@ -18,6 +18,7 @@ declare(strict_types=1);
  */
 
 $root = dirname(__DIR__);
+$argv = $_SERVER['argv'] ?? [];
 
 if (!in_array('--yes', $argv, true)) {
     fwrite(STDERR, "本脚本会 DROP 并重建 logs / log_files / log_metadata，现有日志数据将全部丢失。\n");

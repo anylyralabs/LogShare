@@ -19,6 +19,7 @@ declare(strict_types=1);
  * test -s 断言，因此这里退不出就说明确实是测试本身没跑起来）。
  */
 
+$argv = $_SERVER['argv'] ?? [];
 $input = $argv[1] ?? 'coverage/clover.xml';
 $output = $argv[2] ?? 'coverage/lcov.info';
 

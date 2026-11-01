@@ -7,6 +7,12 @@ require_once __DIR__ . '/../core.php';
 // hyperf/testing 的属性默认值在类加载（反射）时求值 BASE_PATH，须在此提前定义
 ! defined('BASE_PATH') && define('BASE_PATH', dirname(__DIR__));
 
+// 干净 checkout 没有 tmp/（被 .gitignore 忽略），测试与上传解析都需要它
+$tmpDir = CORE_PATH . '/tmp';
+if (!is_dir($tmpDir)) {
+    @mkdir($tmpDir, 0700, true);
+}
+
 // 扫描注解（填充 AnnotationCollector，供 DispatcherFactory 注册注解路由）
 \Hyperf\Di\ClassLoader::init();
 
