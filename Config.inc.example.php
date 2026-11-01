@@ -129,6 +129,8 @@ return [
         // Redis Stream 键名与消费组名
         'stream' => 'events:log:stream',
         'group' => 'log-event-workers',
+        // 单条事件最大尝试次数（含首次执行）；耗尽后进入死信流
+        'maxAttempts' => 3,
         // 是否异步执行 SpinYarn 反混淆
         'asyncDeobfuscate' => true,
         // 是否异步执行关键词与正则安全审计

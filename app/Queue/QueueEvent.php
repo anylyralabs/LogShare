@@ -5,9 +5,9 @@ declare(strict_types=1);
 namespace App\Queue;
 
 /**
- * 统一队列事件上下文对象。
+ * 队列事件上下文。
  *
- * 封装事件名称、唯一标识、结构化载荷、重试状态与流转中断控制。
+ * 只承载业务数据与流转控制；重试次数由消费者单独维护。
  */
 class QueueEvent
 {
@@ -15,34 +15,20 @@ class QueueEvent
     private string $name;
     /** @var array<string, mixed> */
     private array $payload;
-    private int $attempts;
-    private int $maxAttempts;
-    private float $dispatchedAt;
     private bool $propagationStopped = false;
     private ?string $lastError = null;
 
     /**
-     * @param string $name 事件名称
-     * @param array<string, mixed> $payload 事件载荷数据
-     * @param string|null $id 事件唯一 ID（未指定时自动生成）
-     * @param int $attempts 当前已尝试次数
-     * @param int $maxAttempts 最大允许尝试次数
-     * @param float|null $dispatchedAt 派发时间戳
+     * @param array<string, mixed> $payload
      */
     public function __construct(
         string $name,
         array $payload = [],
-        ?string $id = null,
-        int $attempts = 1,
-        int $maxAttempts = 3,
-        ?float $dispatchedAt = null
+        ?string $id = null
     ) {
         $this->name = $name;
         $this->payload = $payload;
         $this->id = $id ?? uniqid('evt_', true);
-        $this->attempts = $attempts;
-        $this->maxAttempts = $maxAttempts;
-        $this->dispatchedAt = $dispatchedAt ?? microtime(true);
     }
 
     public function getId(): string
@@ -61,48 +47,6 @@ class QueueEvent
     public function getPayload(): array
     {
         return $this->payload;
-    }
-
-    public function get(string $key, mixed $default = null): mixed
-    {
-        return $this->payload[$key] ?? $default;
-    }
-
-    public function set(string $key, mixed $value): self
-    {
-        $this->payload[$key] = $value;
-        return $this;
-    }
-
-    public function getAttempts(): int
-    {
-        return $this->attempts;
-    }
-
-    public function setAttempts(int $attempts): self
-    {
-        $this->attempts = max(1, $attempts);
-        return $this;
-    }
-
-    public function incrementAttempts(): void
-    {
-        $this->attempts++;
-    }
-
-    public function getMaxAttempts(): int
-    {
-        return $this->maxAttempts;
-    }
-
-    public function canRetry(): bool
-    {
-        return $this->attempts < $this->maxAttempts;
-    }
-
-    public function getDispatchedAt(): float
-    {
-        return $this->dispatchedAt;
     }
 
     /**
@@ -139,9 +83,6 @@ class QueueEvent
             'id' => $this->id,
             'event' => $this->name,
             'payload' => json_encode($this->payload, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}',
-            'attempts' => (string) $this->attempts,
-            'maxAttempts' => (string) $this->maxAttempts,
-            'dispatchedAt' => (string) $this->dispatchedAt,
         ];
     }
 
@@ -149,7 +90,6 @@ class QueueEvent
      * 从 Redis Stream 原始字段还原事件对象。
      *
      * @param array<string, mixed> $fields
-     * @param string|null $streamId
      */
     public static function fromStreamData(array $fields, ?string $streamId = null): self
     {
@@ -161,10 +101,7 @@ class QueueEvent
         }
 
         $id = isset($fields['id']) && $fields['id'] !== '' ? (string) $fields['id'] : ($streamId ?? uniqid('evt_', true));
-        $attempts = isset($fields['attempts']) ? (int) $fields['attempts'] : 1;
-        $maxAttempts = isset($fields['maxAttempts']) ? (int) $fields['maxAttempts'] : 3;
-        $dispatchedAt = isset($fields['dispatchedAt']) ? (float) $fields['dispatchedAt'] : microtime(true);
 
-        return new self($name, $payload, $id, $attempts, $maxAttempts, $dispatchedAt);
+        return new self($name, $payload, $id);
     }
 }

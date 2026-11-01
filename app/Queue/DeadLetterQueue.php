@@ -10,7 +10,7 @@ use App\Client\RedisStreams;
 /**
  * 统一事件队列死信管理（Dead Letter Queue）。
  *
- * 记录处理重试耗尽或致命异常的事件条目，支持运维检查、重放与清理。
+ * 记录处理重试耗尽或致命异常的事件条目，供故障排查。
  */
 class DeadLetterQueue
 {
@@ -31,7 +31,6 @@ class DeadLetterQueue
                 'id' => $event->getId(),
                 'event' => $event->getName(),
                 'payload' => json_encode($event->getPayload(), JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}',
-                'attempts' => (string) $event->getAttempts(),
                 'error' => $reason,
                 'failedAt' => (string) microtime(true),
             ];

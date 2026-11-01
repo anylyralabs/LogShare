@@ -56,7 +56,7 @@ final class EventQueue
         }
 
         $cfg = self::config();
-        $queueEvent = new QueueEvent($event, $payload, null, 1, $cfg['maxAttempts']);
+        $queueEvent = new QueueEvent($event, $payload);
 
         if (!$cfg['enabled']) {
             return self::executePipeline($queueEvent);
@@ -64,7 +64,7 @@ final class EventQueue
 
         if (RedisClient::getRedis() !== null) {
             try {
-                RedisStreams::xAdd($cfg['stream'], $queueEvent->toStreamData(), 10000);
+                RedisStreams::xAdd($cfg['stream'], $queueEvent->toStreamData());
                 return true;
             } catch (\Throwable $e) {
                 \App\Syslog::error('EventQueue', 'Redis Stream dispatch failed, executing synchronously: ' . $e->getMessage());

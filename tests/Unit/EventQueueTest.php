@@ -69,28 +69,25 @@ afterEach(function () {
     $this->dataProp->setValue(null, $this->origData);
 });
 
-test('QueueEvent context model handles lifecycle, serialization and propagation', function () {
-    $event = new QueueEvent('test.custom_event', ['foo' => 'bar'], 'evt_123', 1, 3);
+test('QueueEvent keeps payload, id and propagation state', function () {
+    $event = new QueueEvent('test.custom_event', ['foo' => 'bar'], 'evt_123');
+
     expect($event->getId())->toBe('evt_123')
         ->and($event->getName())->toBe('test.custom_event')
-        ->and($event->get('foo'))->toBe('bar')
-        ->and($event->get('missing', 'def'))->toBe('def')
-        ->and($event->getAttempts())->toBe(1)
-        ->and($event->canRetry())->toBeTrue();
+        ->and($event->getPayload())->toBe(['foo' => 'bar'])
+        ->and($event->isPropagationStopped())->toBeFalse();
 
-    $event->incrementAttempts();
-    expect($event->getAttempts())->toBe(2);
+    $event->setLastError('boom');
+    expect($event->getLastError())->toBe('boom');
 
     $streamData = $event->toStreamData();
     expect($streamData['event'])->toBe('test.custom_event')
-        ->and($streamData['attempts'])->toBe('2');
+        ->and($streamData)->not->toHaveKey('attempts');
 
     $restored = QueueEvent::fromStreamData($streamData, 'stream_99');
     expect($restored->getId())->toBe('evt_123')
-        ->and($restored->get('foo'))->toBe('bar')
-        ->and($restored->getAttempts())->toBe(2);
+        ->and($restored->getPayload())->toBe(['foo' => 'bar']);
 
-    expect($event->isPropagationStopped())->toBeFalse();
     $event->stopPropagation();
     expect($event->isPropagationStopped())->toBeTrue();
 });
