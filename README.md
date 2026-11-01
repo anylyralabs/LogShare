@@ -25,7 +25,7 @@
 - **日志分享**：`POST /v1/log` 接收文件列表，返回短 ID、文件列表与删除凭证；`GET /v1/log/{id}` 输出文件列表、大小、行数、来源与可见元信息。
 - **多文件与压缩上传**：支持 JSON / 表单上传、`gzip` / `deflate` / `br` 请求体、ZIP 自动展开；文件数 ≤ 200，展开后合计 ≤ 20 MiB，不限制单个文件大小。
 - **按文件读取与分析**：多文件时直接访问 ID 返回文件列表；带文件名才读取指定文件或执行 Codex 分析。
-- **结构化解析**：使用 `aternos/codex-minecraft` 与 `aternos/codex-hytale` 识别日志类型、版本、加载器与崩溃原因；`GET /v1/insights/{id}/{filename}` 返回分析 JSON。
+- **结构化解析**：使用 `aternos/codex-minecraft` 与 `aternos/codex-hytale` 识别日志类型、版本、加载器与崩溃原因；`GET /v1/insights/{id}/{filename}` 返回分析 JSON，Minecraft 分析默认使用 `codex-minecraft` 的简体中文翻译。
 - **删除凭证**：上传时生成明文 token，仅在响应中返回一次；服务端只保存 `sha256:<hex>`，`DELETE /v1/log/{id}` 使用 `Authorization: Bearer <token>` 校验。
 - **内容去重**：按来源与按名称排序的文件集合计算 `xxh128` 指纹，重复上传直接复用已有 ID。
 - **隐私过滤**：入库前统一脱敏 IPv4 / IPv6、UUID、XUID、会话 token、客户端 ID、访问 token、坐标与用户名路径。
@@ -183,6 +183,7 @@ Config::GetPath('urls.apiBaseUrl'); // 嵌套项
 | 配置段 | 作用 | 主要键 |
 | --- | --- | --- |
 | `storage` | 存储后端、保留时长与上传限制 | `storages`、`storageId`、`storageTime`、`uploadFiles` |
+| `codex` | Codex 日志翻译语言 | `language` |
 | `mongo` | MongoDB 连接与磁盘回收 | `url`、`database`、`autoCompact`、`freeSpaceTargetMB`、`compactInterval`、连接超时 |
 | `cache` | Redis 缓存 | `cacheId`、`enabled`、`redis`、`ttl`、`maxSize` |
 | `id` | 短 ID 字符集与长度 | `characters`、`length` |
@@ -196,6 +197,7 @@ Config::GetPath('urls.apiBaseUrl'); // 嵌套项
 关键默认值：
 
 - `storage.storageTime`：`604800` 秒（7 天）。
+- `codex.language`：`zh-CN`（简体中文）；可改为 `zh-TW` 或 `en`。
 - `storage.uploadFiles.maxFiles`：200；`maxTotalBytes`：20 MiB；`maxRequestBodyBytes`：32 MiB。
 - `mongo.compactInterval`：21,600 秒（6 小时），MongoDB 7.x / autoCompact 不可用时由 `MongoCompactProcess` 执行 `compact`。
 - `cache.ttl`：1,800 秒；`cache.maxSize`：5 MiB（全部文件合计）。
@@ -211,6 +213,7 @@ Config::GetPath('urls.apiBaseUrl'); // 嵌套项
 | `APP_NAME` | Hyperf 应用名，默认 `logshare` |
 | `SCAN_CACHEABLE` | 是否缓存注解扫描结果 |
 | `MONGODB_URI` / `MONGODB_DATABASE` | MongoDB 连接 URI 与数据库名 |
+| `CODEX_LANGUAGE` | 覆盖 `codex.language`，如 `zh-CN`、`zh-TW`、`en` |
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_TIMEOUT` / `REDIS_PASSWORD` | 覆盖 `cache.redis` |
 | `STORAGE_TIME` | 覆盖 `storage.storageTime`（秒） |
 | `WAF_SNAPSHOT_PATH` | 指定 OpenLiteWaf 快照文件路径 |
@@ -362,6 +365,8 @@ curl https://api.logshare.cn/v1/insights/s4Kd9xQ/latest.log
 ```
 
 使用 Aternos Codex 对指定文件执行 `detect → parse → analyse`，直接返回分析 JSON（不包 `success` 外壳，且不包含原始条目）。分析结果在进程内按内容 MD5 做 LRU 缓存：最多 32 条、单条 4 MiB、总计 32 MiB。
+
+问题、解决方案、日志类型与信息标签默认使用简体中文，由 `aternos/codex-minecraft` 的 `lang/zh-CN.json` 提供，语言由 `codex.language`（或 `CODEX_LANGUAGE`）控制。`aternos/codex` 核心本身不带翻译层；`aternos/codex-hytale` 当前没有语言包，Hytale 的版本标签仍是英文。
 
 - 单文件日志可省略文件名。
 - 多文件日志省略文件名时返回 `200` + 文件列表，客户端选择后再请求。

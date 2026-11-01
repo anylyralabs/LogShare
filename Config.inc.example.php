@@ -64,6 +64,13 @@ return [
         'length' => 6,
     ],
 
+    /* ─── Codex 日志分析 ───────────────────────────────────── */
+    'codex' => [
+        // aternos/codex-minecraft 的翻译语言；可用值见包的 lang/*.json。
+        // zh-CN：简体中文；zh-TW：繁体中文；en：英文。
+        'language' => 'zh-CN',
+    ],
+
     /* ─── Filter ───────────────────────────────────────────── */
     'filter' => [
         'pre' => [

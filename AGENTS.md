@@ -34,6 +34,7 @@ php vendor/bin/pest --filter=TestName
 
 ## 请求链路
 
+- Codex 翻译：`app/Detective.php` 在构造时读取 `codex.language`（默认 `zh-CN`）并调用 `codex-minecraft` 的 `Translator::setLanguage()`；问题/解决方案/类型标签才会是中文。`aternos/codex` 核心无翻译层，`aternos/codex-hytale` 没有语言包。
 - 上传：`POST /v1/log` → `RequestParser` 解压 → `ContentParser` 解析 `files` / `metadata` / `source` → `UploadParser` 校验 / ZIP 展开（同名条目自动改名为 `name (2)`）→ `Log::put()` 逐文件 `preFilter` + SpinYarn 反混淆 → 存储 → 200。没有正文、没有异步队列、没有应用层内容审核；全文 Codex 分析只在 `/v1/insights/{id}[/{filename}]` 按需执行。
 - 读取：`GET /v1/log/{id}` 返回文件列表；`GET /v1/raw/{id}` 单文件返回内容、多文件返回 200 + 文件列表；带文件名才取指定文件。`GET /v1/insights/{id}` 同理，多文件先列文件，`/insights/{id}/{filename}` 才执行 Codex。`DELETE /v1/log/{id}` 校验 Bearer 删除 token：库里只存 `sha256:<hex>`，`Token::fromHash()` 永远只比较哈希，**存储值本身不能当凭证**。读路径不做清理或 DDL；过期由 MongoDB TTL 索引处理，`autoCompact` 可用时由其持续回收（MongoDB 8.0 + 相应权限）；否则由 `MongoCompactProcess` 周期性 `compact` 兜底。
 

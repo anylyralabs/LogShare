@@ -65,3 +65,11 @@ test('derived entries carry display labels the clients render directly', functio
         'loader' => '模组加载器',
     ]);
 });
+
+test('codex minecraft analysis is localized to simplified chinese', function () {
+    $log = new Log();
+    $detected = $log->analyseContent(FABRIC_LOG);
+
+    expect(\Aternos\Codex\Minecraft\Translator\Translator::getInstance()->getLanguage())->toBe('zh-CN');
+    expect($detected->getTypeName())->toBe('服务器日志');
+});

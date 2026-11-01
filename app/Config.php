@@ -60,6 +60,7 @@ class Config
      *  - REDIS_PASSWORD     → cache.redis.password
      *  - MONGODB_URI        → mongo.url
      *  - MONGODB_DATABASE   → mongo.database
+     *  - CODEX_LANGUAGE     → codex.language
      *
      * @param array<string, mixed> $data Config array by reference
      * @return void
@@ -74,6 +75,9 @@ class Config
         }
         if (($mongoDatabase = getenv('MONGODB_DATABASE')) !== false && $mongoDatabase !== '') {
             $data['mongo']['database'] = $mongoDatabase;
+        }
+        if (($codexLanguage = getenv('CODEX_LANGUAGE')) !== false && $codexLanguage !== '') {
+            $data['codex']['language'] = $codexLanguage;
         }
         if ($host = getenv('REDIS_HOST')) {
             $data['cache']['redis']['host'] = $host;

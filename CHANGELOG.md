@@ -10,6 +10,7 @@
 - **移除应用层内容审核**：不再加载关键词/正则内容规则；内容防护由边缘 OpenLiteWaf 承担。
 - **按文件访问**：`GET /v1/log/{id}` 返回文件列表；单文件 `raw`/`insights` 自动选择，多文件返回 `200` + 文件列表；新增 `/v1/insights/{id}/{filename}`。
 - **移除 `POST /v1/analyse`**：分析只针对已存储文件的指定文件名执行。
+- **Codex 分析中文化**：`App\Detective` 在首次 detect/analyse 前按 `codex.language` 设置 `codex-minecraft` 的 `Translator`，默认 `zh-CN`；`CODEX_LANGUAGE` 可覆盖。`codex-hytale` 暂无语言包，其 Hytale 版本标签仍为英文。
 - **限额调整**：最多 200 个文件、展开后合计 20 MiB、请求体解压后 32 MiB；不限制单个文件大小或行数。
 - **部署要求**：MongoDB 7.0+（TTL + 自动 compact；autoCompact 可用时优先使用）；旧 MariaDB 日志不迁移，旧 `s` 开头 ID 不可读。
 
