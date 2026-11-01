@@ -62,3 +62,16 @@ test('storage class must implement StorageInterface', function () {
 test('cache class must implement CacheInterface', function () {
     loadConfigArray(['cache' => ['cacheId' => \App\Data\Token::class]]);
 })->throws(InvalidArgumentException::class, 'must implement');
+
+test('Config load drops legacy ai and github sections', function () {
+    $tmp = CORE_PATH . '/tmp/legacy_config_' . uniqid() . '.php';
+    file_put_contents($tmp, "<?php return ['ai' => ['apiKeys' => ['sk-leaked']], 'github' => ['tokens' => ['ghp_leaked']]];");
+
+    try {
+        Config::load($tmp);
+        expect(Config::all())->not->toHaveKey('ai')->not->toHaveKey('github');
+    } finally {
+        @unlink($tmp);
+        Config::load(CORE_PATH . '/Config.inc.php');
+    }
+});

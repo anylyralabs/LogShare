@@ -421,29 +421,6 @@ final class SecurityService
     }
 
     /**
-     * 加密单个敏感字符串（如屏蔽关键词或正则），生成 enc:v1:<base64>。
-     */
-    public static function encryptSecret(string $plaintext): string
-    {
-        if ($plaintext === '' || str_starts_with($plaintext, self::CIPHER_PREFIX)) {
-            return $plaintext;
-        }
-
-        $key = self::getEncryptionKey();
-        $iv = random_bytes(12);
-        $tag = '';
-        $cipher = openssl_encrypt($plaintext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
-        if ($cipher === false || strlen($tag) !== 16) {
-            // 绝不静默落明文：调用方会把返回值直接写盘，退回明文等于
-            // 在磁盘上暴露违规关键词，与加密存储的承诺相反。
-            \App\Syslog::error('SecurityService', 'Failed to encrypt secret: openssl_encrypt returned false or short tag');
-            throw new \RuntimeException('Failed to encrypt secret; refusing to persist plaintext');
-        }
-
-        return self::CIPHER_PREFIX . base64_encode($iv . $tag . $cipher);
-    }
-
-    /**
      * 解密单个密文字符串。
      *
      * @throws \RuntimeException 当密文格式损坏或认证解密失败时
@@ -472,17 +449,6 @@ final class SecurityService
         }
 
         return $plain;
-    }
-
-    /**
-     * 批量加密规则列表。
-     *
-     * @param string[] $list
-     * @return string[]
-     */
-    public static function encryptRulesList(array $list): array
-    {
-        return array_values(array_unique(array_map(fn($item) => self::encryptSecret(trim((string) $item)), $list)));
     }
 
     /**
@@ -518,7 +484,7 @@ final class SecurityService
     {
         $rawRules = null;
 
-        // 1. 优先读取 Config 动态配置作为唯一真相来源（支持跨 Worker 毫秒热生效）
+        // 1. 优先读取 Config.inc.php 中的静态规则
         $configRules = Config::Get('security')['contentRules'] ?? null;
         if (is_array($configRules) && (!empty($configRules['keywords']) || !empty($configRules['patterns']))) {
             $rawRules = [

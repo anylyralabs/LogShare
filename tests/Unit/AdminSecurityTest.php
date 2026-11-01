@@ -49,15 +49,12 @@ afterEach(function () {
     foreach ([
         CORE_PATH . '/runtime/content_reject_rules.json',
         CORE_PATH . '/runtime/security_bans.json',
-        Config::getDynamicConfigPath(),
+        CORE_PATH . '/runtime/dynamic_config.json',
     ] as $file) {
         if (is_file($file)) {
             @unlink($file);
         }
     }
-    $this->configRef->getProperty('dynamicMtime')->setValue(null, 0);
-    $this->configRef->getProperty('dynamicSize')->setValue(null, -1);
-    $this->configRef->getProperty('dynamicVersion')->setValue(null, '');
     $this->dataProp->setValue(null, $this->origData);
 });
 

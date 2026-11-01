@@ -143,7 +143,7 @@ app/                      核心类库（App\ 命名空间）
 ├── System/               系统核心服务（SecurityService、LogPartitionManager）
 ├── Telemetry/            客户端遥测统计服务
 ├── ApiError.php          API 业务异常（ApiExceptionHandler 统一渲染）
-├── Config.php            配置加载器、环境变量覆盖与动态热重载引擎
+├── Config.php            配置加载器与环境变量覆盖
 ├── ContentParser.php     请求正文与启动器特征识别
 ├── Detective.php         日志类型与服务端版本探测
 ├── UploadParser.php      多文件安全校验与 ZIP 展开引擎

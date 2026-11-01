@@ -6,26 +6,9 @@ class Config
 {
     /** @var array<string, mixed> */
     private static array $data = [];
-    private static bool $loaded = false;
-    private static int $dynamicMtime = 0;
-    private static int $dynamicSize = -1;
-    private static string $dynamicVersion = '';
-    private static string $baseConfigPath = '';
-    private static bool $checkingFresh = false;
-    /**
-     * 当前协程（或 CLI 进程）是否已完成过一次新鲜度检查。
-     *
-     * 配置热生效的语义是「下一个请求可见」：同一个请求内调用 Get() 十几次时，
-     * 只有第一次需要 stat 动态配置文件并查询 Redis 版本号，后续复用结果。
-     * 用协程 Context 而不是时间窗口，既能省掉重复检查，又不会让「写完立刻读」
-     * 的调用方（例如管理端保存后立即回读、单测）看到过期数据。
-     */
-    private const FRESH_CONTEXT_KEY = 'logshare_config_fresh_checked';
 
     public static function load(string $path): void
     {
-        self::$baseConfigPath = $path;
-
         $example = CORE_PATH . '/Config.inc.example.php';
         $defaultData = [];
         if (is_file($example)) {
@@ -39,7 +22,6 @@ class Config
             if (!empty($defaultData)) {
                 $data = $defaultData;
             } else {
-                self::$loaded = true;
                 return;
             }
         } else {
@@ -51,8 +33,7 @@ class Config
         }
 
         self::applyEnvironmentOverrides($data);
-        self::applyDynamicOverrides($data);
-        // 旧版已移除的 ai/github 段不得再通过管理接口暴露
+        // 旧版已移除的 ai/github 段直接丢弃，避免遗留密钥泄露
         unset($data['ai'], $data['github']);
         // Example 配置中的占位符（如 '${REDIS_PASSWORD}'）在非 Docker 部署下不会
         // 被替换，占位符形态一律视为未配置，避免拿字面量去 AUTH Redis
@@ -63,13 +44,7 @@ class Config
         }
         self::validate($data);
 
-        $dynamicPath = self::getDynamicConfigPath();
-        clearstatcache(true, $dynamicPath);
-        self::$dynamicMtime = is_file($dynamicPath) ? (filemtime($dynamicPath) ?: 0) : 0;
-        self::$dynamicSize = is_file($dynamicPath) ? (filesize($dynamicPath) ?: 0) : -1;
-
         self::$data = $data;
-        self::$loaded = true;
     }
 
     /**
@@ -135,7 +110,7 @@ class Config
             }
         }
 
-        // 预过滤链是字符串类名，一旦写错（或动态配置被改成不存在的类），
+        // 预过滤链是字符串类名，一旦写错，
         // 上传与 /analyse 会在调用处抛 Error 变 500，只能回滚配置才能恢复。
         $filters = $data['filter']['pre'] ?? [];
         if (!is_array($filters)) {
@@ -191,63 +166,11 @@ class Config
     }
 
     /**
-     * Ensure in-memory configuration is fresh across Swoole resident worker processes
-     * by detecting dynamic config file mtime/size changes and Redis version bump.
-     */
-    public static function ensureFresh(): void
-    {
-        if (self::$checkingFresh) {
-            return;
-        }
-
-        $basePath = self::$baseConfigPath !== '' ? self::$baseConfigPath : (CORE_PATH . '/Config.inc.php');
-        if (!self::$loaded) {
-            self::load($basePath);
-            return;
-        }
-
-        // 同一请求（协程）内只检查一次；CLI/单测没有协程时退化为每次都检查。
-        if (self::freshCheckedInThisContext()) {
-            return;
-        }
-
-        $dynamicPath = self::getDynamicConfigPath();
-        clearstatcache(true, $dynamicPath);
-        $exists = is_file($dynamicPath);
-        $currentMtime = $exists ? (filemtime($dynamicPath) ?: 0) : 0;
-        $currentSize = $exists ? (filesize($dynamicPath) ?: 0) : -1;
-
-        if ($currentMtime !== self::$dynamicMtime || $currentSize !== self::$dynamicSize) {
-            self::load($basePath);
-            self::markFreshChecked(true);
-            return;
-        }
-
-        if ($exists && extension_loaded('redis')) {
-            self::$checkingFresh = true;
-            try {
-                $redis = \App\Client\RedisClient::getRedis();
-                if ($redis !== null) {
-                    $remoteVer = (string) ($redis->get('config:dynamic:version') ?: '');
-                    if ($remoteVer !== '' && self::$dynamicVersion !== '' && $remoteVer !== self::$dynamicVersion) {
-                        self::load($basePath);
-                    }
-                    self::markFreshChecked(true);
-                }
-            } catch (\Throwable) {
-            } finally {
-                self::$checkingFresh = false;
-            }
-        }
-    }
-
-    /**
      * 读取一个顶层配置段。
      *
      * 只接受段名（如 `storage`、`security`）。传入 `storage.storageTime`
      * 这类点路径会静默返回空数组，这里直接抛错，把误用暴露在开发阶段。
-     */
-    /**
+     *
      * @return array<string, mixed>
      */
     public static function Get(string $name): array
@@ -258,7 +181,6 @@ class Config
             );
         }
 
-        self::ensureFresh();
         return self::$data[$name] ?? [];
     }
 
@@ -267,7 +189,6 @@ class Config
      */
     public static function GetPath(string $path, mixed $default = null): mixed
     {
-        self::ensureFresh();
 
         $value = self::$data;
         foreach (explode('.', $path) as $segment) {
@@ -281,7 +202,6 @@ class Config
 
     public static function has(string $name): bool
     {
-        self::ensureFresh();
         return isset(self::$data[$name]);
     }
 
@@ -290,48 +210,7 @@ class Config
      */
     public static function all(): array
     {
-        self::ensureFresh();
         return self::$data;
-    }
-
-    public static function getDynamicConfigPath(): string
-    {
-        $runtimeDir = CORE_PATH . '/runtime';
-        if (!is_dir($runtimeDir)) {
-            @mkdir($runtimeDir, 0755, true);
-        }
-        return $runtimeDir . '/dynamic_config.json';
-    }
-
-    /**
-     * 判断是否为示例配置里的占位值（这些值必须被部署方替换）。
-     */
-    public static function isPlaceholderSecret(string $value): bool
-    {
-        $lower = strtolower(trim($value));
-        if ($lower === '') {
-            return false;
-        }
-
-        foreach (['change-this', 'change-me', 'changeme', 'replace-with', 'your-', 'example', 'placeholder', 'xxxx'] as $marker) {
-            if (str_contains($lower, $marker)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    public static function maskSecret(?string $secret): string
-    {
-        if ($secret === null || $secret === '') {
-            return '';
-        }
-        $len = strlen($secret);
-        if ($len <= 8) {
-            return '********';
-        }
-        return substr($secret, 0, 4) . '****' . substr($secret, -4);
     }
 
     /**
@@ -355,342 +234,6 @@ class Config
             }
         }
         return $base;
-    }
-
-    /**
-     * @param array<string, mixed> $data
-     */
-    private static function applyDynamicOverrides(array &$data): void
-    {
-        $path = self::getDynamicConfigPath();
-        if (!is_file($path)) {
-            self::$dynamicVersion = '';
-            return;
-        }
-        $content = @file_get_contents($path);
-        if ($content === false || $content === '') {
-            self::$dynamicVersion = '';
-            return;
-        }
-        $decoded = json_decode($content, true);
-        if (is_array($decoded)) {
-            if (isset($decoded['_meta']['version'])) {
-                self::$dynamicVersion = (string) $decoded['_meta']['version'];
-                unset($decoded['_meta']);
-            }
-            $data = self::deepMerge($data, $decoded);
-            $explicitKeys = [
-                ['security', 'contentRules'],
-                ['security', 'ipBans'],
-                ['security', 'trustedProxies'],
-                ['rateLimit', 'routes'],
-                ['rateLimit', 'trustedProxies'],
-                ['filter', 'pre'],
-            ];
-            foreach ($explicitKeys as [$section, $field]) {
-                if (isset($decoded[$section][$field]) && is_array($decoded[$section][$field])) {
-                    $data[$section][$field] = $decoded[$section][$field];
-                }
-            }
-        }
-    }
-
-    /**
-     * Restore original secret values if the incoming update contains masked placeholders.
-     *
-     * @param array<string, mixed> $updates
-     * @param array<string, mixed> $original
-     */
-    private static function restoreMaskedSecrets(array &$updates, array $original): void
-    {
-        // Scalar secret fields
-        $secretFields = [
-            ['cache', 'redis', 'password'],
-            ['storage', 'mariadb', 'password'],
-        ];
-        foreach ($secretFields as $path) {
-            $curr = &$updates;
-            $origCurr = $original;
-            $found = true;
-            foreach ($path as $p) {
-                if (!isset($curr[$p])) {
-                    $found = false;
-                    break;
-                }
-                $curr = &$curr[$p];
-                $origCurr = $origCurr[$p] ?? null;
-            }
-            if ($found && is_string($curr)) {
-                if (str_contains($curr, '****') || $curr === '******' || $curr === '********') {
-                    $curr = is_string($origCurr) ? $origCurr : '';
-                }
-            }
-            unset($curr);
-        }
-    }
-
-    /**
-     * Return configuration tree with sensitive credentials masked.
-     *
-     * @return array<string, mixed>
-     */
-    public static function getMasked(): array
-    {
-        self::ensureFresh();
-        $masked = self::$data;
-        unset($masked['_meta']);
-
-        if (isset($masked['cache']['redis']['password']) && (string) $masked['cache']['redis']['password'] !== '') {
-            $masked['cache']['redis']['password'] = '******';
-        }
-        if (isset($masked['storage']['mariadb']['password']) && (string) $masked['storage']['mariadb']['password'] !== '') {
-            $masked['storage']['mariadb']['password'] = '******';
-        }
-        if (isset($masked['security']['contentRules']['keywords']) && is_array($masked['security']['contentRules']['keywords'])) {
-            $masked['security']['contentRules']['keywords'] = \App\System\SecurityService::decryptRulesList($masked['security']['contentRules']['keywords']);
-        }
-        if (isset($masked['security']['contentRules']['patterns']) && is_array($masked['security']['contentRules']['patterns'])) {
-            $masked['security']['contentRules']['patterns'] = \App\System\SecurityService::decryptRulesList($masked['security']['contentRules']['patterns']);
-        }
-
-        return $masked;
-    }
-
-    /**
-     * Persist dynamic configuration updates and hot-reload in-memory config.
-     *
-     * @param array<string, mixed> $updates
-     */
-    public static function saveDynamic(array $updates): void
-    {
-        self::ensureFresh();
-        unset($updates['ai'], $updates['github']);
-        if (isset($updates['_meta'])) {
-            unset($updates['_meta']);
-        }
-        self::restoreMaskedSecrets($updates, self::$data);
-
-        $explicitKeys = [
-            ['security', 'contentRules'],
-            ['security', 'ipBans'],
-            ['security', 'trustedProxies'],
-            ['rateLimit', 'routes'],
-            ['rateLimit', 'trustedProxies'],
-            ['filter', 'pre'],
-        ];
-
-        $candidate = self::deepMerge(self::$data, $updates);
-        foreach ($explicitKeys as [$section, $field]) {
-            if (isset($updates[$section][$field]) && is_array($updates[$section][$field])) {
-                $candidate[$section][$field] = $updates[$section][$field];
-            }
-        }
-
-        $path = self::getDynamicConfigPath();
-        $existing = [];
-        if (is_file($path)) {
-            $raw = @file_get_contents($path);
-            if ($raw !== false && $raw !== '') {
-                $existing = json_decode($raw, true) ?: [];
-                unset($existing['_meta']);
-            }
-        }
-        $newDynamic = self::deepMerge($existing, $updates);
-        foreach ($explicitKeys as [$section, $field]) {
-            if (isset($updates[$section][$field]) && is_array($updates[$section][$field])) {
-                $newDynamic[$section][$field] = $updates[$section][$field];
-            }
-        }
-
-        // 双向同步：若更新了 security.contentRules，加密持久化写入 runtime/content_reject_rules.json
-        if (isset($updates['security']['contentRules']) && is_array($updates['security']['contentRules'])) {
-            $rulesPath = CORE_PATH . '/runtime/content_reject_rules.json';
-            $rulesDir = dirname($rulesPath);
-            if (!is_dir($rulesDir)) {
-                @mkdir($rulesDir, 0777, true);
-            }
-            $rawKw = (array) ($updates['security']['contentRules']['keywords'] ?? []);
-            $rawPt = (array) ($updates['security']['contentRules']['patterns'] ?? []);
-            $encKw = \App\System\SecurityService::encryptRulesList($rawKw);
-            $encPt = \App\System\SecurityService::encryptRulesList($rawPt);
-
-            $newDynamic['security']['contentRules']['keywords'] = $encKw;
-            $newDynamic['security']['contentRules']['patterns'] = $encPt;
-
-            $rulesData = [
-                'enabled' => (bool) ($updates['security']['contentRules']['enabled'] ?? true),
-                'keywords' => $encKw,
-                'patterns' => $encPt,
-                'updatedAt' => time(),
-            ];
-            @file_put_contents($rulesPath, json_encode($rulesData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
-        }
-
-        $version = (string) (int) (microtime(true) * 1000000);
-        $newDynamic['_meta'] = [
-            'version' => $version,
-            'updatedAt' => time(),
-        ];
-
-        // 校验的必须是「落盘内容合并到基准配置后」的结果：$candidate 基于
-        // 内存快照，与磁盘上的 $newDynamic 在并发写时可能不同，只用前者会
-        // 放过非法合并结果；而 $newDynamic 本身只是增量，直接校验会误判
-        // 缺失的配置段。这里以 baseConfig 为基准重建一次。
-        self::validate(self::applyDynamicToBase($newDynamic));
-
-        $dir = dirname($path);
-        if (!is_dir($dir)) {
-            @mkdir($dir, 0755, true);
-        }
-
-        $tmpPath = $path . '.tmp.' . bin2hex(random_bytes(4));
-        $encoded = json_encode($newDynamic, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        if ($encoded === false || file_put_contents($tmpPath, $encoded) === false) {
-            @unlink($tmpPath);
-            throw new \RuntimeException('Failed to write dynamic config file');
-        }
-        // 动态配置含加密后的安全规则与连接凭据掩码，禁止 world-readable
-        @chmod($tmpPath, 0600);
-
-        if (!rename($tmpPath, $path)) {
-            @unlink($tmpPath);
-            throw new \RuntimeException('Failed to atomic-rename dynamic config file');
-        }
-
-        clearstatcache(true, $path);
-        self::markFreshChecked(false);
-        self::$dynamicMtime = filemtime($path) ?: time();
-        self::$dynamicSize = filesize($path) ?: strlen((string) $encoded);
-        self::$dynamicVersion = $version;
-        self::$data = $candidate;
-
-        if (extension_loaded('redis')) {
-            self::$checkingFresh = true;
-            try {
-                $redis = \App\Client\RedisClient::getRedis();
-                $redis?->set('config:dynamic:version', $version);
-            } catch (\Throwable) {
-            } finally {
-                self::$checkingFresh = false;
-            }
-        }
-    }
-
-    /**
-     * 当前上下文是否已经检查过新鲜度。
-     */
-    private static function freshCheckedInThisContext(): bool
-    {
-        if (!class_exists(\Hyperf\Context\Context::class)) {
-            return false;
-        }
-        return \Hyperf\Context\Context::get(self::FRESH_CONTEXT_KEY) === true;
-    }
-
-    /**
-     * 标记（或清除）当前上下文的新鲜度检查状态。
-     *
-     * @param bool $checked 为 false 时清除标记，强制下次 Get() 重新检查
-     */
-    private static function markFreshChecked(bool $checked): void
-    {
-        if (!class_exists(\Hyperf\Context\Context::class)) {
-            return;
-        }
-        if ($checked) {
-            \Hyperf\Context\Context::set(self::FRESH_CONTEXT_KEY, true);
-            return;
-        }
-        \Hyperf\Context\Context::destroy(self::FRESH_CONTEXT_KEY);
-    }
-
-    /**
-     * 把动态配置合并到「示例配置 + Config.inc.php」基准之上，得到落盘后
-     * 真正会生效的完整配置（供 saveDynamic() 校验使用）。
-     *
-     * @param array<string, mixed> $dynamic
-     * @return array<string, mixed>
-     */
-    private static function applyDynamicToBase(array $dynamic): array
-    {
-        $base = require CORE_PATH . '/Config.inc.example.php';
-        if (!is_array($base)) {
-            $base = [];
-        }
-
-        $path = self::$baseConfigPath !== '' ? self::$baseConfigPath : (CORE_PATH . '/Config.inc.php');
-        if (is_file($path)) {
-            $userConfig = require $path;
-            if (is_array($userConfig)) {
-                $base = self::deepMerge($base, $userConfig);
-            }
-        }
-
-        $decoded = $dynamic;
-        unset($decoded['_meta']);
-
-        $merged = self::deepMerge($base, $decoded);
-        unset($merged['ai'], $merged['github']);
-
-        return $merged;
-    }
-
-    /**
-     * Reset dynamic overrides and reload base configuration.
-     */
-    public static function resetDynamic(): void
-    {
-        $path = self::getDynamicConfigPath();
-        if (is_file($path)) {
-            @unlink($path);
-            clearstatcache(true, $path);
-        }
-        self::$dynamicMtime = 0;
-        self::$dynamicSize = -1;
-        self::$dynamicVersion = '';
-        self::markFreshChecked(false);
-        if (extension_loaded('redis')) {
-            self::$checkingFresh = true;
-            try {
-                $redis = \App\Client\RedisClient::getRedis();
-                $redis?->del('config:dynamic:version');
-            } catch (\Throwable) {
-            } finally {
-                self::$checkingFresh = false;
-            }
-        }
-        self::load(self::$baseConfigPath !== '' ? self::$baseConfigPath : (CORE_PATH . '/Config.inc.php'));
-    }
-
-    /**
-     * Get raw dynamic configuration array without _meta.
-     *
-     * @return array<string, mixed>
-     */
-    public static function getDynamicConfigRaw(): array
-    {
-        $path = self::getDynamicConfigPath();
-        if (!is_file($path)) {
-            return [];
-        }
-        $raw = @file_get_contents($path);
-        if ($raw === false || $raw === '') {
-            return [];
-        }
-        $decoded = json_decode($raw, true);
-        if (!is_array($decoded)) {
-            return [];
-        }
-        unset($decoded['_meta']);
-        return $decoded;
-    }
-
-    /**
-     * Touch dynamic config checking to ensure freshness across worker coroutines.
-     */
-    public static function touchDynamicConfig(): void
-    {
-        self::ensureFresh();
     }
 }
 

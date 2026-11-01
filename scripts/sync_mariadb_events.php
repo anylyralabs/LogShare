@@ -38,18 +38,6 @@ if (!is_file($configPath)) {
 
 $config = require $configPath;
 
-// 动态配置可覆盖 TTL
-$dynamicConfigPath = dirname(__DIR__) . '/runtime/dynamic_config.json';
-if (is_file($dynamicConfigPath)) {
-    $dynamicRaw = @file_get_contents($dynamicConfigPath);
-    if ($dynamicRaw !== false && $dynamicRaw !== '') {
-        $dynamicDecoded = json_decode($dynamicRaw, true);
-        if (is_array($dynamicDecoded) && isset($dynamicDecoded['storage']['storageTime'])) {
-            $config['storage']['storageTime'] = $dynamicDecoded['storage']['storageTime'];
-        }
-    }
-}
-
 $storageTime = $config['storage']['storageTime'] ?? null;
 if (!is_int($storageTime) && !is_float($storageTime) && !is_string($storageTime)) {
     fwrite(STDERR, "storage.storageTime is missing\n");
