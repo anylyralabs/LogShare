@@ -26,6 +26,7 @@
 - **多文件与压缩上传**：支持 JSON / 表单上传、`gzip` / `deflate` / `br` 请求体、ZIP 自动展开；文件数 ≤ 200，展开后合计 ≤ 20 MiB，不限制单个文件大小。
 - **按文件读取与分析**：多文件时直接访问 ID 返回文件列表；带文件名才读取指定文件或执行 Codex 分析。
 - **结构化解析**：使用 `aternos/codex-minecraft` 与 `aternos/codex-hytale` 识别日志类型、版本、加载器与崩溃原因；`GET /v1/insights/{id}/{filename}` 返回分析 JSON，Minecraft 分析默认使用 `codex-minecraft` 的简体中文翻译。
+- **中文 Fabric / Quilt 报告**：Fabric Loader / Quilt Loader 输出的中文 Mod Resolution 报告（缺失依赖、版本范围、Minecraft 版本不匹配、模组冲突等）可直接解析；无日志头的独立解析报告也会按 Fabric/Quilt 报告识别。覆盖矩阵见 `docs/codex-zh-coverage.md`。
 - **删除凭证**：上传时生成明文 token，仅在响应中返回一次；服务端只保存 `sha256:<hex>`，`DELETE /v1/log/{id}` 使用 `Authorization: Bearer <token>` 校验。
 - **内容去重**：按来源与按名称排序的文件集合计算 `xxh128` 指纹，重复上传直接复用已有 ID。
 - **隐私过滤**：入库前统一脱敏 IPv4 / IPv6、UUID、XUID、会话 token、客户端 ID、访问 token、坐标与用户名路径。

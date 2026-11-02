@@ -44,6 +44,15 @@ php vendor/bin/pest --filter=TestName
 - 上传：`POST /v1/log` → `RequestParser` 解压 → `ContentParser` 解析 `files` / 旧版 `content` / `metadata` / `source` → `UploadParser` 校验 / ZIP 展开（同名条目自动改名为 `name (2)`）→ `Log::put()` 逐文件 `preFilter` + SpinYarn 反混淆 → `MongoStorage::Put()` 经 `MongoGateway` 存储 → 200。旧版 `content` 会映射为 `latest.log`，与 `files` 同时存在时作为主文件；没有异步队列、没有应用层内容审核；全文 Codex 分析只在 `/v1/insights/{id}[/{filename}]` 按需执行。
 - 读取：`GET /v1/log/{id}` 返回文件列表；`GET /v1/raw/{id}` 单文件返回内容、多文件返回 200 + 文件列表；带文件名才取指定文件。`GET /v1/insights/{id}` 同理，多文件先列文件，`/insights/{id}/{filename}` 才执行 Codex。`DELETE /v1/log/{id}` 校验 Bearer 删除 token：库里只存 `sha256:<hex>`，`Token::fromHash()` 永远只比较哈希，**存储值本身不能当凭证**。读路径不做清理或 DDL；过期由 MongoDB TTL 索引处理，`autoCompact` 可用时由其持续回收（MongoDB 8.0 + 相应权限）；否则由 `MongoCompactProcess` 周期性 `compact` 兜底。
 
+## Codex 中文本地化
+
+- 只有 Fabric / Quilt Loader 的 Mod Resolution 文本会随 Locale 输出中文；Fabric/Quilt 的中文问题由 `app/Codex/Analysis/Problem/Fabric/` 下的子类直接解析，不修改 `vendor/`。
+- `Log::analyseContent()` 会按日志类型选择 `App\Codex\Analyser\FabricAnalyser`、`FabricCrashReportAnalyser`、`QuiltAnalyser`、`QuiltCrashReportAnalyser`；新增 Fabric/Quilt 变体时同步扩展这些 analyser 与自定义 Insight。
+- 启动器可能只保存无日志头的 resolution 文本，`App\Codex\FabricResolutionReport` 负责回退识别；不要把普通文本误判为 Fabric。
+- `App\Codex\Translation\TranslatorOverlay` 在 `App\Detective` 初始化时补齐 Codex 缺失的 `datapack-parsing-problem` 与 Fabric dependency 文案；升级 `codex-minecraft` 后必须重跑翻译覆盖测试。
+- 输入覆盖矩阵与维护步骤见 `docs/codex-zh-coverage.md`；回归用例见 `tests/Unit/CodexChineseAnalysisTest.php` 与 `tests/Unit/CodexTranslationCoverageTest.php`。
+- 非 Fabric/Quilt 的 Codex pattern 是英文技术日志/异常类名，不因为客户端语言变化而本地化；不要为了“全中文”给它们编造中文正则，输出翻译由 Translator 统一处理。
+
 ## 存储 / ID
 
 - 日志 ID 固定 7 位：首字符为存储标识（当前仅 MongoDB）+ 6 位随机。不要改 `id.characters` 或 `id.length`。
@@ -106,7 +115,7 @@ php vendor/bin/pest --filter=TestName
 - 覆盖率先 `--coverage-clover` 再用 `scripts/clover_to_lcov.php` 转 LCOV。
 - 远端已迁移到 GitHub，`.github/workflows/` 直接触发；CI 与生产 Compose 均使用兼容 ARM64 39-bit VA 的 `mongo:7.0`；`scripts/init_mongodb.php` 初始化索引/TTL，`MongoCompactProcess` 周期性 `compact` 完成磁盘回收。MongoDB 8.0 且账号具备权限时会优先使用内置 `autoCompact`。
 - 版本单一来源是 `app/Version.php`。发版时改 `CHANGELOG.md` 首条并同步 `README.md` / `openapi.yaml`，提交信息以 `[Build]` 开头；tag 与 Release notes 取自 CHANGELOG 首条。
-- 版本策略：当前发布版本为 `1.8.8`；后续发版按用户指定版本执行。
+- 版本策略：默认不主动迭代。补充性小改动发 `_supplement.N`（如 `1.8.8_supplement.1`）；非重要问题修复发 `_fix.N`；重要问题修复发 `_hotfix.N`。只有用户明确要求迭代时才递增常规版本。
 - 发布包用 `git archive` 分别导出主仓与两个子模块后合并，确保 submodule 内容不会在归档中缺失；资产名 `LogShare-v<version>.tar.gz`，并附 `.sha256` 校验文件。
 - submodule 先在自身仓库提交推送，再回主仓更新指针（沿用 `chore: 更新 OpenLiteWaf submodule 指针（…）`）。
 
