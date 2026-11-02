@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.8.8_supplement.1 — 2026-11-02
+
+### 新增
+
+- **中文 Fabric / Quilt 解析报告**：支持 Fabric Loader / Quilt Loader 的中文 Mod Resolution 文本，包括依赖缺失、版本不匹配、当前环境停用、其他限制条件无法载入、模组 breaks / conflicts 与 Minecraft 版本不兼容。
+- **完整版本范围**：支持 `任意版本`、精确版本、`及以上`、`以上任意`、`及以下`、`以下任意` 与 `从 A（含/不含）到 B（含/不含）的任意版本`，并转换为安装建议。
+- **独立报告识别**：没有 `latest.log` 时间戳、只有启动器 resolution 文本的报告也会按 Fabric/Quilt 服务器日志分析。
+- **Quilt 支持**：Quilt 复用 Fabric 的本地化文案，新增对应的 analyser 与崩溃报告覆盖。
+
+### 修复
+
+- **英文 `between` 空依赖**：修复上游 `FabricModDependencyProblem` 在未加引号依赖时生成 `缺失前置 mod ''` 的问题。
+- **中文翻译缺口**：补上 `datapack-parsing-problem`，并为 Fabric 依赖 mismatch / env-disabled / invalid 增加中文与英文文案。
+
+### 测试
+
+- 新增中文 Fabric、独立报告、Quilt、版本范围、Minecraft 版本不匹配、模组冲突与英文回归测试。
+- 新增 Codex-Minecraft 全量字面量翻译 key 覆盖测试。
+- 新增 `docs/codex-zh-coverage.md` 覆盖矩阵。
+
 ## 1.8.8 — 2026-11-02
 
 ### 修复
