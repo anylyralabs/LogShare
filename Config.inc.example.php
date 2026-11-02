@@ -33,6 +33,9 @@ return [
         // 生产环境通过 MONGODB_URI 注入带认证的完整 URI；本地开发可直连无认证实例。
         'url' => 'mongodb://127.0.0.1:27017',
         'database' => 'logshare',
+        // 访问驱动：native = ext-mongodb（同步阻塞，仅 CLI/测试/回滚）；
+        // gotask = Go 边车（HTTP 运行时使用）。生产由 MONGODB_DRIVER=gotask 覆盖。
+        'driver' => 'native',
         // MongoDB 8.0 且账号具备权限时，autoCompact 持续在后台压缩集合并回收磁盘。
         // 7.x / 权限不足时由 MongoCompactProcess 周期性 compact 兜底。
         'autoCompact' => true,

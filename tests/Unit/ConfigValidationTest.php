@@ -11,9 +11,11 @@ beforeEach(function () {
     $this->origData = (new ReflectionClass(Config::class))->getProperty('data')->getValue();
     $this->origMongoUri = getenv('MONGODB_URI');
     $this->origMongoDatabase = getenv('MONGODB_DATABASE');
+    $this->origMongoDriver = getenv('MONGODB_DRIVER');
     // 配置校验用例要验证 in-config 的非法值，不能被 CI 注入的 MONGODB_* 环境变量覆盖。
     putenv('MONGODB_URI');
     putenv('MONGODB_DATABASE');
+    putenv('MONGODB_DRIVER');
 });
 
 afterEach(function () {
@@ -27,6 +29,11 @@ afterEach(function () {
         putenv('MONGODB_DATABASE');
     } else {
         putenv('MONGODB_DATABASE=' . $this->origMongoDatabase);
+    }
+    if ($this->origMongoDriver === false) {
+        putenv('MONGODB_DRIVER');
+    } else {
+        putenv('MONGODB_DRIVER=' . $this->origMongoDriver);
     }
 });
 
@@ -81,6 +88,10 @@ test('mongo uri and database are validated', function () {
 test('mongo database must not be empty', function () {
     loadConfigArray(['mongo' => ['database' => '']]);
 })->throws(InvalidArgumentException::class, 'mongo.database is required');
+
+test('mongo driver must be native or gotask', function () {
+    loadConfigArray(['mongo' => ['driver' => 'bogus']]);
+})->throws(InvalidArgumentException::class, 'mongo.driver');
 
 test('cache class must implement CacheInterface', function () {
     loadConfigArray(['cache' => ['cacheId' => \App\Data\Token::class]]);

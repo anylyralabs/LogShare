@@ -60,6 +60,7 @@ class Config
      *  - REDIS_PASSWORD     → cache.redis.password
      *  - MONGODB_URI        → mongo.url
      *  - MONGODB_DATABASE   → mongo.database
+     *  - MONGODB_DRIVER     → mongo.driver（native / gotask）
      *  - CODEX_LANGUAGE     → codex.language
      *
      * @param array<string, mixed> $data Config array by reference
@@ -75,6 +76,9 @@ class Config
         }
         if (($mongoDatabase = getenv('MONGODB_DATABASE')) !== false && $mongoDatabase !== '') {
             $data['mongo']['database'] = $mongoDatabase;
+        }
+        if (($mongoDriver = getenv('MONGODB_DRIVER')) !== false && $mongoDriver !== '') {
+            $data['mongo']['driver'] = $mongoDriver;
         }
         if (($codexLanguage = getenv('CODEX_LANGUAGE')) !== false && $codexLanguage !== '') {
             $data['codex']['language'] = $codexLanguage;
@@ -160,6 +164,10 @@ class Config
         }
         if (trim((string) ($mongo['database'] ?? '')) === '') {
             throw new \InvalidArgumentException('mongo.database is required');
+        }
+        $mongoDriver = (string) ($mongo['driver'] ?? 'native');
+        if (!in_array($mongoDriver, ['native', 'gotask'], true)) {
+            throw new \InvalidArgumentException("mongo.driver must be 'native' or 'gotask', got '{$mongoDriver}'");
         }
 
         $cacheClass = $data['cache']['cacheId'] ?? null;
