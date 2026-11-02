@@ -95,6 +95,7 @@ php vendor/bin/pest --filter=TestName
 - 请求体解压统一走 `App\Parser\RequestParser`（默认 32 MiB 上限，可由 `storage.uploadFiles.maxRequestBodyBytes` 调整）；brotli 用单参 `brotli_uncompress($body)`，第二参是字典，传整数会 TypeError。
 - 响应压缩由 Swoole `http_compression`（level 6、min 1024）优先 Brotli；nginx 只做 gzip 兜底并透传 `Accept-Encoding`。
 - 配置统一走 `App\Config::Get()`；修改 `Config.inc.php` 后需重启 Swoole 进程生效，不要在进程启动时缓存一份副本。
+- Docker 基础镜像固定 PHP 8.5.12（2026-10-21 安全版本）；升级 PHP 时同步 `docker/hyperf.Dockerfile`、CI 与 README，并跑 Docker E2E。
 - Docker 部署中 PHP 代码烘进 hyperf 镜像，改 PHP 必须重建镜像；`Config.inc.php`、`.env`、`mappings/`、`runtime/` 是挂载。重建前先 `rm -rf runtime/container` 清扫描缓存（尤其 `SCAN_CACHEABLE=true`）。
 - Compose 的必填密码变量用 `${VAR:?}`，命令带 `--env-file .env`；`docker compose down -v` 会删 `logshare-mongo-data` / `logshare-redis-data`，不要执行。
 - 镜像内的 jemalloc（`LD_PRELOAD` + `MALLOC_CONF`）是为常驻进程 RSS 回落，改 Dockerfile 时保留。

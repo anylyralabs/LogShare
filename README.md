@@ -38,7 +38,7 @@
 
 | 层级 | 技术 |
 | --- | --- |
-| 运行时 | PHP >= 8.4（生产镜像使用 PHP 8.5）、Hyperf 3.2、Swoole 6.2 |
+| 运行时 | PHP >= 8.4（生产镜像使用 PHP 8.5.12）、Hyperf 3.2、Swoole 6.2 |
 | 数据库 | MongoDB 7.0+，`logs` 父文档 + `log_chunks` 内容分块，TTL + 自动 compact |
 | 数据库访问 | HTTP 路径经 GoTask Go 边车（`hyperf/gotask`）；CLI / 索引 / compact 使用 ext-mongodb |
 | 缓存 | Redis 7.4（可选），只用于读缓存 |
@@ -614,6 +614,6 @@ CI 位于 `.github/workflows/`：PHP 8.4 / 8.5 测试矩阵、PHPStan、架构�
 
 ## 版本与许可
 
-版本号唯一来源是 `app/Version.php`，当前为 `1.8.8_fix.1`。对外暴露版本信息的位置应引用该常量，避免多处硬编码漂移。
+版本号唯一来源是 `app/Version.php`，当前为 `1.8.8_hotfix.1`。对外暴露版本信息的位置应引用该常量，避免多处硬编码漂移。
 
 项目使用 MIT 许可证，详见 `LICENSE`。

@@ -24,8 +24,9 @@ RUN go mod download
 COPY gotask/ ./
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/logshare-gotask ./cmd/logshare-gotask
 
-# 阶段 3：最终镜像（php:8.5-cli，Hyperf 常驻进程）
-FROM php:8.5.0-cli-bookworm
+# 阶段 3：最终镜像（PHP 8.5.12 安全补丁版本，Hyperf 常驻进程）
+# 8.5.12 是 2026-10-21 的 PHP 安全修复版本；不要回退到 8.5.0。
+FROM php:8.5.12-cli-bookworm
 
 # Composer（安装项目依赖用）
 COPY --from=composer:2.8.9 /usr/bin/composer /usr/bin/composer
