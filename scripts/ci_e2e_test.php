@@ -9,13 +9,15 @@ declare(strict_types=1);
  *   php scripts/ci_e2e_test.php --base-url=http://127.0.0.1:9501 [--waf-test]
  */
 
-$options = getopt('', ['base-url:', 'waf-test::']);
+$options = getopt('', ['base-url:', 'waf-test::', 'large-file::']);
 $baseUrl = rtrim(is_string($options['base-url'] ?? null) ? $options['base-url'] : 'http://127.0.0.1:9501', '/');
 $testWaf = isset($options['waf-test']);
+$testLargeFile = isset($options['large-file']);
 
 echo "=== 开始 LogShare 真实环境端到端测试 ===\n";
 echo "目标地址: {$baseUrl}\n";
 echo "WAF/网关测试模式: " . ($testWaf ? "已启用" : "未启用") . "\n";
+echo "大文件分块测试: " . ($testLargeFile ? "已启用" : "未启用") . "\n";
 
 $testsRun = 0;
 $testsPassed = 0;
@@ -234,6 +236,57 @@ runCheck('DELETE /v1/log/{id} 鉴权拦截与有效 Token 成功删除', functio
         throw new RuntimeException("删除后获取日志应返回 404，实际: {$getAfterDel['status']}");
     }
 });
+
+// ── 4. 大文件分块与 IPC 传输（若开启 --large-file） ──
+
+if ($testLargeFile) {
+    $largeId = null;
+    $largeToken = null;
+    $largeMarker = null;
+
+    runCheck('POST /v1/log 上传 9 MiB 日志并分块写入', function () use ($baseUrl, &$largeId, &$largeToken, &$largeMarker) {
+        $largeMarker = 'LARGE-' . bin2hex(random_bytes(8));
+        $content = $largeMarker . "\n" . str_repeat('A', 9 * 1024 * 1024);
+        $payload = (string) json_encode([
+            'source' => 'ci-large-file/1.0',
+            'content' => $content,
+        ]);
+
+        $res = httpRequest('POST', "{$baseUrl}/v1/log", ['Content-Type' => 'application/json'], $payload);
+        if ($res['status'] !== 200) {
+            throw new RuntimeException("大文件上传失败，状态码 {$res['status']}: " . substr($res['body'], 0, 300));
+        }
+
+        $json = json_decode($res['body'], true);
+        if (empty($json['id']) || empty($json['token']) || ($json['files'][0]['name'] ?? '') !== 'latest.log') {
+            throw new RuntimeException("大文件上传响应不完整: " . substr($res['body'], 0, 300));
+        }
+
+        $largeId = $json['id'];
+        $largeToken = $json['token'];
+    });
+
+    runCheck('GET /v1/raw/{id}/latest.log 大文件内容完整返回', function () use ($baseUrl, &$largeId, &$largeMarker) {
+        $res = httpRequest('GET', "{$baseUrl}/v1/raw/{$largeId}/latest.log");
+        if ($res['status'] !== 200) {
+            throw new RuntimeException("大文件读取失败，状态码 {$res['status']}");
+        }
+        $expectedLength = strlen((string) $largeMarker) + 1 + 9 * 1024 * 1024;
+        if (strlen($res['body']) !== $expectedLength) {
+            throw new RuntimeException('大文件内容长度不匹配: ' . strlen($res['body']) . " != {$expectedLength}");
+        }
+        if (!str_starts_with($res['body'], (string) $largeMarker)) {
+            throw new RuntimeException('大文件内容前缀不匹配');
+        }
+    });
+
+    runCheck('DELETE /v1/log/{id} 清理大文件测试数据', function () use ($baseUrl, &$largeId, &$largeToken) {
+        $res = httpRequest('DELETE', "{$baseUrl}/v1/log/{$largeId}", ['Authorization' => "Bearer {$largeToken}"]);
+        if ($res['status'] !== 200) {
+            throw new RuntimeException("大文件删除失败，状态码 {$res['status']}: {$res['body']}");
+        }
+    });
+}
 
 // ── 4. WAF 与边缘安全网关测试（若开启 --waf-test） ──
 

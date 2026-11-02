@@ -199,6 +199,18 @@ jobs:
       - name: Copy Config
         run: cp Config.inc.example.php Config.inc.php
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: gotask/go.mod
+          cache-dependency-path: gotask/go.sum
+
+      - name: Build GoTask Sidecar
+        run: |
+          cd gotask
+          go vet ./...
+          CGO_ENABLED=0 go build -trimpath -o ../bin/logshare-gotask ./cmd/logshare-gotask
+
       - name: Initialize MongoDB Indexes, TTL & AutoCompact
         run: php scripts/init_mongodb.php
         env:
@@ -212,7 +224,7 @@ jobs:
         run: |
           php bin/hyperf.php start > /tmp/hyperf.log 2>&1 &
           sleep 15
-          php scripts/ci_e2e_test.php --base-url=http://127.0.0.1:9501 || {
+          php scripts/ci_e2e_test.php --base-url=http://127.0.0.1:9501 --large-file || {
             echo '=== hyperf.log ==='
             cat /tmp/hyperf.log
             exit 1
@@ -221,6 +233,8 @@ jobs:
         env:
           MONGODB_URI: mongodb://127.0.0.1:27017
           MONGODB_DATABASE: logshare
+          MONGODB_DRIVER: gotask
+          GOTASK_ENABLE: "true"
           REDIS_HOST: 127.0.0.1
           REDIS_PORT: 6379
 
@@ -297,7 +311,7 @@ jobs:
           # 执行涵盖 Nginx 反代、HTTPS、OpenLiteWaf 防护与 OpenLiteStats 的全量真实环境测试
           # OPENLITEWAF_ADMIN_TOKEN 与写入 .env 的值保持一致，供解封通道自检断言使用
           OPENLITEWAF_ADMIN_TOKEN=ci-openlitewaf-token \
-            php scripts/ci_e2e_test.php --base-url=https://localhost --waf-test || {
+            php scripts/ci_e2e_test.php --base-url=https://localhost --waf-test --large-file || {
             echo '=== 测试失败，输出容器日志 ==='
             docker compose --env-file .env -f docker/compose.yaml logs
             docker compose --env-file .env -f docker/compose.yaml down
