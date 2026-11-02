@@ -41,6 +41,15 @@ class MongoStorage implements StorageInterface
     public const CHUNK_BYTES = 8 * 1024 * 1024;
 
     /**
+     * 单次 IPC 写入的分块总字节上限。
+     *
+     * 20 MiB 上传如果一次性塞进 insertMany，会在 PHP、socket 和 Go 侧同时
+     * 产生大块内存；按约 4 MiB 分批后，单个 8 MiB 分块仍会单独成批，但不会
+     * 把多个文件的分块累积成一个超大 payload。
+     */
+    public const CHUNK_BATCH_BYTES = 4 * 1024 * 1024;
+
+    /**
      * TTL 索引比逻辑存储时长多留的宽限。
      *
      * 续期需要同时更新父文档和多个分块，MongoDB 单机模式下没有跨文档事务。
@@ -123,7 +132,8 @@ class MongoStorage implements StorageInterface
 
         try {
             $descriptors = [];
-            $chunkDocuments = [];
+            $chunkBatch = [];
+            $chunkBatchBytes = 0;
 
             foreach ($files as $fileIndex => $file) {
                 $data = (string) ($file['data'] ?? '');
@@ -137,17 +147,27 @@ class MongoStorage implements StorageInterface
                 ];
 
                 for ($seq = 0; $seq < $chunkCount; $seq++) {
-                    $chunkDocuments[] = [
+                    $chunkData = substr($data, $seq * self::CHUNK_BYTES, self::CHUNK_BYTES);
+                    $chunkBatch[] = [
                         'log_id' => $rawId,
                         'file_index' => (int) $fileIndex,
                         'seq' => $seq,
-                        'data' => new Binary(substr($data, $seq * self::CHUNK_BYTES, self::CHUNK_BYTES), Binary::TYPE_GENERIC),
+                        'data' => new Binary($chunkData, Binary::TYPE_GENERIC),
                         'created' => $created,
                     ];
+                    $chunkBatchBytes += strlen($chunkData);
+
+                    if ($chunkBatchBytes >= self::CHUNK_BATCH_BYTES) {
+                        $gateway->insertMany(self::COLLECTION_CHUNKS, $chunkBatch);
+                        $chunkBatch = [];
+                        $chunkBatchBytes = 0;
+                    }
                 }
             }
 
-            $gateway->insertMany(self::COLLECTION_CHUNKS, $chunkDocuments);
+            if ($chunkBatch !== []) {
+                $gateway->insertMany(self::COLLECTION_CHUNKS, $chunkBatch);
+            }
 
             $metadataRows = [];
             $seenKeys = [];
