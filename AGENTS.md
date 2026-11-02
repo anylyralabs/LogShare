@@ -106,7 +106,7 @@ php vendor/bin/pest --filter=TestName
 - 覆盖率先 `--coverage-clover` 再用 `scripts/clover_to_lcov.php` 转 LCOV。
 - 远端已迁移到 GitHub，`.github/workflows/` 直接触发；CI 与生产 Compose 均使用兼容 ARM64 39-bit VA 的 `mongo:7.0`；`scripts/init_mongodb.php` 初始化索引/TTL，`MongoCompactProcess` 周期性 `compact` 完成磁盘回收。MongoDB 8.0 且账号具备权限时会优先使用内置 `autoCompact`。
 - 版本单一来源是 `app/Version.php`。发版时改 `CHANGELOG.md` 首条并同步 `README.md` / `openapi.yaml`，提交信息以 `[Build]` 开头；tag 与 Release notes 取自 CHANGELOG 首条。
-- 版本策略：当前发布版本为 `1.8.6`；后续发版按用户指定版本执行。
+- 版本策略：当前发布版本为 `1.8.7`；后续发版按用户指定版本执行。
 - 发布包用 `git archive` 分别导出主仓与两个子模块后合并，确保 submodule 内容不会在归档中缺失；资产名 `LogShare-v<version>.tar.gz`，并附 `.sha256` 校验文件。
 - submodule 先在自身仓库提交推送，再回主仓更新指针（沿用 `chore: 更新 OpenLiteWaf submodule 指针（…）`）。
 

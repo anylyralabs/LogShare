@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.8.7 — 2026-11-02
+
+### 变更
+
+- **MongoDB 网络 I/O 迁移到 GoTask**：新增 `gotask/` Go 边车与 `App\Client\Mongo\MongoGateway`，HTTP 上传、读取、续期与删除不再在 Swoole worker 内直接调用 ext-mongodb；生产 Compose 固定 `MONGODB_DRIVER=gotask`。
+- **驱动开关**：新增 `mongo.driver` 与 `MONGODB_DRIVER`，取值 `native` / `gotask`；默认 `native` 仅用于 CLI、测试和紧急回滚，索引/TTL/compact 仍由原生驱动在启动脚本与独立进程执行。
+- **故障语义**：GoTask 边车或网关不可用时返回 `503` + `Retry-After`，不静默回退到会阻塞 worker 的原生驱动；连接与命令超时可通过 `MONGODB_CONNECT_TIMEOUT` / `MONGODB_READ_WRITE_TIMEOUT` 配置。
+- **可靠 Goridge 传输**：新增 `ReliableCoroutineSocketRelay`，循环写满 frame 并定长读取，修复上游 `SocketTransporter::send()` 在数百 KB 以上 payload 时只写一部分导致的超时。
+- **分块写入分批**：`log_chunks` 按约 4 MiB 分批写入，避免一次 IPC 传输 20 MiB；单个 8 MiB 分块仍会单独成批。
+- **构建与测试**：Docker 镜像增加 Go 多阶段构建；CI 编译边车并以 9 MiB 大文件 E2E 验证 GoTask 路径，新增 `scripts/bench_api.php` 并发基准。
+
 ## 1.8.6 — 2026-11-02
 
 ### 变更
