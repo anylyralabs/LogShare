@@ -86,6 +86,12 @@ services:
       SCAN_CACHEABLE: "true"
       MONGODB_URI: "mongodb://logshare:${MONGO_PASSWORD:?MONGO_PASSWORD must be set}@mongo:27017/?authSource=logshare"
       MONGODB_DATABASE: logshare
+      # HTTP 请求路径通过 GoTask 边车访问 MongoDB；边车不可用时返回 503，
+      # 不会静默回退到会阻塞 Swoole worker 的原生驱动。
+      MONGODB_DRIVER: gotask
+      GOTASK_ENABLE: "true"
+      MONGODB_CONNECT_TIMEOUT: 5s
+      MONGODB_READ_WRITE_TIMEOUT: 120s
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}

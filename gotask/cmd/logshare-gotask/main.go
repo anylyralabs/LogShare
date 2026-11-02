@@ -35,6 +35,8 @@ func main() {
 		log.Fatalf("注册 GoTask MongoDB 代理失败: %v", err)
 	}
 
+	log.Printf("GoTask MongoDB 边车已启动，监听 %s", gotask.GetAddress())
+
 	if err := gotask.Run(); err != nil {
 		log.Fatalf("GoTask 边车退出: %v", err)
 	}
