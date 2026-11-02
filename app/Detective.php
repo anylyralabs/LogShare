@@ -2,6 +2,7 @@
 
 namespace App;
 
+use App\Codex\Translation\TranslatorOverlay;
 use Aternos\Codex\Minecraft\Log\Minecraft\MinecraftLog;
 use Aternos\Codex\Minecraft\Translator\Translator;
 
@@ -31,10 +32,12 @@ class Detective extends \Aternos\Codex\Detective\Detective
 
         try {
             Translator::getInstance()->setLanguage($language);
+            TranslatorOverlay::install($language);
         } catch (\Throwable $e) {
             // 配置写错语言代码时退回英文，不能让分析接口直接 500。
             \App\Syslog::warning('Codex', '语言包加载失败，回退英文: ' . $e->getMessage());
             Translator::getInstance()->setLanguage('en');
+            TranslatorOverlay::install('en');
         }
     }
 }

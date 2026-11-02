@@ -2,9 +2,20 @@
 
 namespace App;
 
+use App\Codex\Analyser\FabricAnalyser;
+use App\Codex\Analyser\FabricCrashReportAnalyser;
+use App\Codex\Analyser\QuiltAnalyser;
+use App\Codex\Analyser\QuiltCrashReportAnalyser;
+use App\Codex\FabricResolutionReport;
 use Aternos\Codex\Log\File\StringLogFile;
 use Aternos\Codex\Minecraft\Log\Minecraft\MinecraftLog;
+use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\Fabric\FabricClientLog;
+use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\Fabric\FabricCrashReportLog;
 use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\Fabric\FabricLog;
+use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\Quilt\QuiltClientLog;
+use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\Quilt\QuiltCrashReportLog;
+use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\Quilt\QuiltLog;
+use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\Quilt\QuiltServerLog;
 use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\VanillaClientLog;
 use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\VanillaCrashReportLog;
 use Aternos\Codex\Minecraft\Log\Minecraft\Vanilla\VanillaNetworkProtocolErrorReportLog;
@@ -439,11 +450,41 @@ class Log
         }
 
         $detected = (new Detective())->setLogFile(new StringLogFile($content))->detect();
+
+        // Codex 的通用行 detector 会让 Quilt 日志在 Fabric 之后命中；按
+        // 内容里的 Quilt 标记纠正日志类型，确保使用 QuiltAnalyser。
+        if ($detected instanceof FabricLog
+            && (str_contains($content, 'Quilt Loader') || str_contains($content, 'org.quiltmc'))) {
+            $detected = match (true) {
+                $detected instanceof FabricCrashReportLog => new QuiltCrashReportLog(),
+                $detected instanceof FabricClientLog => new QuiltClientLog(),
+                default => new QuiltServerLog(),
+            };
+            $detected->setLogFile(new StringLogFile($content));
+        }
+
+        // 启动器可能只保存 Fabric/Quilt 的 resolution 报告，没有日志头；
+        // 这种情况下 Codex 会判为未知日志，按 Fabric 服务器日志补做识别。
+        if (!$detected instanceof FabricLog
+            && !$detected instanceof QuiltLog
+            && FabricResolutionReport::matches($content)) {
+            $detected = FabricResolutionReport::createLog($content);
+            $detected->setLogFile(new StringLogFile($content));
+        }
+
         if (!$detected instanceof \Aternos\Codex\Log\AnalysableLog) {
             throw new ApiError(500, 'Unsupported log type.');
         }
         $detected->parse();
-        $detected->analyse();
+
+        $analyser = match (true) {
+            $detected instanceof FabricCrashReportLog => new FabricCrashReportAnalyser(),
+            $detected instanceof FabricLog => new FabricAnalyser(),
+            $detected instanceof QuiltCrashReportLog => new QuiltCrashReportAnalyser(),
+            $detected instanceof QuiltLog => new QuiltAnalyser(),
+            default => null,
+        };
+        $detected->analyse($analyser);
 
         return $detected;
     }
