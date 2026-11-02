@@ -1,12 +1,14 @@
 # LogShare — Agent Guide
 
-面向 Minecraft / Hytale 的日志分享与本地 Codex 解析平台；AI 智能诊断已外包给外部服务。仓库主体是 PHP 后端、边缘 Lua 与 Docker 配置，没有前端构建。技术栈：PHP 8.4+ / Hyperf 3.2 / Swoole 6.2 常驻协程、MongoDB 7.0+、Redis（可选）。完整目录树与用户文档见 `README.md`；API 契约以 `API.md`、`openapi.yaml`、`postman_collection.json` 为准。
+面向 Minecraft / Hytale 的日志分享与本地 Codex 解析平台；AI 智能诊断已外包给外部服务。仓库主体是 PHP 后端、边缘 Lua 与 Docker 配置，没有前端构建。技术栈：PHP 8.4+ / Hyperf 3.2 / Swoole 6.2 常驻协程、MongoDB 7.0+、Redis（可选）；MongoDB 网络 I/O 由 GoTask Go 边车承担。完整目录树与用户文档见 `README.md`；API 契约以 `API.md`、`openapi.yaml`、`postman_collection.json` 为准。
 
 ## 入口与结构
 
 - `bin/hyperf.php`：CLI 与服务入口；`core.php`：引导并加载 `Config.inc.php`；PSR-4 将 `App\` 映射到 `app/`。
 - HTTP 监听 `0.0.0.0:9501`（`config/autoload/server.php`）。控制器使用 Hyperf 注解路由，前缀 `/{version:v?1}` 同时匹配已弃用的 `/1` 与 `/v1`。
 - 存储后端固定为 MongoDB（`storage.storageId` = `m`）；日志 ID 首字符为存储标识。Redis 不是硬依赖，缺失时读缓存降级。
+- MongoDB 访问分两条路径：HTTP CRUD 经 `App\Client\Mongo\MongoGateway`（生产为 GoTask 边车）；索引 / TTL / compact / ping 由 `MongoStorage` 保留的运维方法走 ext-mongodb，只在 CLI 与独立进程调用。
+- `gotask/` 是独立 Go module，编译 `bin/logshare-gotask`；`app/Client/GoTask/` 是可靠的 Goridge 传输实现（循环写满 frame），`config/autoload/gotask.php` 控制边车生命周期。
 - `OpenLiteWaf/`（当前 1.3.1）、`OpenLiteStats/`（当前 1.2.0）是独立仓库的 git submodule（GitHub `anylyralabs/*`），有自己的测试与发布流程；改动需在各自仓库提交，再回主仓更新指针。
 - 参考文档：`OpenLiteWaf/README.md`、`docs/`、`CHANGELOG.md`；`LOCAL_DEV_NOTES.md` 仅本地、被 `.git/info/exclude` 排除，永不提交。
 
@@ -19,6 +21,9 @@ cp Config.inc.example.php Config.inc.php
 php scripts/init_mongodb.php   # 索引 / TTL / 磁盘回收
 php bin/hyperf.php start
 
+./scripts/build_gotask.sh      # 可选：本地编译 GoTask 边车
+GOTASK_ENABLE=true MONGODB_DRIVER=gotask php bin/hyperf.php start
+
 composer test                 # Pest 全量
 composer test:architecture    # 架构约束
 composer stan                 # PHPStan level 7（app/ scripts/ bin/）
@@ -26,16 +31,17 @@ php vendor/bin/pest tests/Unit/FilterTest.php
 php vendor/bin/pest --filter=TestName
 ```
 
-- 测试引导在 `tests/bootstrap.php`：自动创建 `Config.inc.php`，未加载 ext-redis 时用 `RedisMock`。单测可离线跑；`tests/Integration` 与 `MongoStorageTest` 需要 MongoDB / Redis，缺失会 skip。`tests/Unit/ControllersUnitTest.php` 用反射直接实例化控制器，避免 Hyperf AOP 代理干扰覆盖率。
+- 测试引导在 `tests/bootstrap.php`：自动创建 `Config.inc.php`，未加载 ext-redis 时用 `RedisMock`。单测可离线跑；`tests/Integration` 与 `MongoStorageTest` 需要 MongoDB / Redis，缺失会 skip。默认 `mongo.driver=native`；验证 GoTask 时设置 `MONGODB_DRIVER=gotask`、`GOTASK_SOCKET=...` 并先启动边车。`tests/Unit/ControllersUnitTest.php` 用反射直接实例化控制器，避免 Hyperf AOP 代理干扰覆盖率。
 - 集成环境：先由 `.env.example` 准备 `.env`，再 `docker compose --env-file .env -f docker/compose.yaml up -d`。
 - `RedisClient::setTestConnection()` 可让 Redis 相关单测固定走 `RedisMock`；压缩请求用例需要 ext-brotli（CI 已装）。
 - Lua 回归：`php OpenLiteWaf/tests/openlitewaf_regex_test.php`、`lua5.1 OpenLiteWaf/tests/openlitewaf_logic_test.lua`、`lua5.1 OpenLiteStats/tests/openlitestats_logic_test.lua`、`luac5.1 -p OpenLiteWaf/lua/*.lua OpenLiteStats/lua/*.lua`。两套 Lua 测试 stub 了 `ngx`，只能验证流程/计数/作用域，真实 `ngx.re` 与请求体覆盖在 E2E。
+- 修改 Go 代码后跑 `cd gotask && go vet ./... && go build ./cmd/logshare-gotask`；CI 会安装 Go 1.24 并编译边车。
 - 仓库没有配置 formatter；改完代码至少跑相关 Pest、架构测试、PHPStan。`phpstan.neon` 只排除 `SpinYarnClient`（CI 无 spinyarn 扩展）；level 7 已覆盖 `app/`、`scripts/`、`bin/`，新增文件必须保持零告警。
 
 ## 请求链路
 
 - Codex 翻译：`app/Detective.php` 在构造时读取 `codex.language`（默认 `zh-CN`）并调用 `codex-minecraft` 的 `Translator::setLanguage()`；问题/解决方案/类型标签才会是中文。`aternos/codex` 核心无翻译层，`aternos/codex-hytale` 没有语言包。
-- 上传：`POST /v1/log` → `RequestParser` 解压 → `ContentParser` 解析 `files` / 旧版 `content` / `metadata` / `source` → `UploadParser` 校验 / ZIP 展开（同名条目自动改名为 `name (2)`）→ `Log::put()` 逐文件 `preFilter` + SpinYarn 反混淆 → 存储 → 200。旧版 `content` 会映射为 `latest.log`，与 `files` 同时存在时作为主文件；没有异步队列、没有应用层内容审核；全文 Codex 分析只在 `/v1/insights/{id}[/{filename}]` 按需执行。
+- 上传：`POST /v1/log` → `RequestParser` 解压 → `ContentParser` 解析 `files` / 旧版 `content` / `metadata` / `source` → `UploadParser` 校验 / ZIP 展开（同名条目自动改名为 `name (2)`）→ `Log::put()` 逐文件 `preFilter` + SpinYarn 反混淆 → `MongoStorage::Put()` 经 `MongoGateway` 存储 → 200。旧版 `content` 会映射为 `latest.log`，与 `files` 同时存在时作为主文件；没有异步队列、没有应用层内容审核；全文 Codex 分析只在 `/v1/insights/{id}[/{filename}]` 按需执行。
 - 读取：`GET /v1/log/{id}` 返回文件列表；`GET /v1/raw/{id}` 单文件返回内容、多文件返回 200 + 文件列表；带文件名才取指定文件。`GET /v1/insights/{id}` 同理，多文件先列文件，`/insights/{id}/{filename}` 才执行 Codex。`DELETE /v1/log/{id}` 校验 Bearer 删除 token：库里只存 `sha256:<hex>`，`Token::fromHash()` 永远只比较哈希，**存储值本身不能当凭证**。读路径不做清理或 DDL；过期由 MongoDB TTL 索引处理，`autoCompact` 可用时由其持续回收（MongoDB 8.0 + 相应权限）；否则由 `MongoCompactProcess` 周期性 `compact` 兜底。
 
 ## 存储 / ID
@@ -43,6 +49,7 @@ php vendor/bin/pest --filter=TestName
 - 日志 ID 固定 7 位：首字符为存储标识（当前仅 MongoDB）+ 6 位随机。不要改 `id.characters` 或 `id.length`。
 - 上传限制在落库前强制执行：最多 200 个文件、展开后合计 20 MiB、请求体解压后 32 MiB；不限制单个文件大小或行数。ZIP 必须继续防路径穿越与膨胀炸弹。单文件可能超过 16 MiB，`MongoStorage` 按 8 MiB 拆块写入 `log_chunks`。
 - `logs` 父文档保存 token、来源、指纹、metadata 与文件描述；文件内容写入 `log_chunks`，单块 8 MiB，规避 MongoDB 16 MiB BSON 上限。父文档先以 `status=pending` 占住 `_id`，分块完成后再置为 `ready`；读取只认 `ready`。
+- 分块写入按 `MongoStorage::CHUNK_BATCH_BYTES`（约 4 MiB）分批，单个 8 MiB 分块仍会单独成批；不要退回一次性把全部文件塞进一个 IPC frame。
 - 父文档与分块都带 BSON Date 类型的 `created`，各自建立 TTL 索引；TTL 的 `expireAfterSeconds` 是 `storageTime + 120` 秒宽限，查询仍按 `storageTime` 过滤逻辑过期。`Renew()` 先更新分块、再更新父文档。
 - `scripts/init_mongodb.php` 创建/同步索引与 TTL，并尝试启用 MongoDB 8.0 `autoCompact`；`MongoCompactProcess` 在 autoCompact 不可用（含 7.x）时按 `mongo.compactInterval` 周期性执行 `compact`。磁盘自动收缩依赖二者，不要删除。
 - `logs.token` 存 `sha256:<hex>`（71 字符）；MongoDB 字符串没有列宽限制，但格式与哈希比较逻辑保持不变。
@@ -70,7 +77,9 @@ php vendor/bin/pest --filter=TestName
 ## 运行时 / 部署
 
 - Swoole 是常驻进程：进程级缓存、扩展句柄、注解代理类都跨请求存活。改解析 / 反混淆 / 进程状态后必须重启，不能只改文件。
-- `ext-mongodb` 基于 libmongoc，Swoole 的协程 hook 不生效；大文件读写会同步阻塞当前 worker。上线前做并发压测；若成为瓶颈，再评估 Swoole RemoteObject/GoTask 隔离，不要直接假设它已被协程化。
+- `ext-mongodb` 基于 libmongoc，Swoole 的协程 hook 不生效；HTTP worker 内不要直接调用 `MongoDBClient` / `NativeGateway`。生产固定 `MONGODB_DRIVER=gotask`，GoTask 边车不可用时返回 503，不静默回退原生驱动。
+- `App\Client\GoTask\ReliableCoroutineSocketRelay` 必须保留循环 send / 定长 recv：上游 `hyperf/gotask` 的 `SocketTransporter::send()` 只调用一次 `send()`，数百 KB 以上 payload 会写不完整并导致 60s 超时。
+- 索引 / TTL / autoCompact / compact 仍使用 ext-mongodb，但只允许在 `scripts/init_mongodb.php`、`MongoCompactProcess` 和测试中使用，不要放进 HTTP 请求链路。
 - 常驻进程外呼 cURL 一律 `CURLOPT_FORBID_REUSE => true`，并在 `finally` 中 `curl_close` / `$ch = null`，否则 FD 累积到 EMFILE；不要用 Swoole 协程 hook 不支持的选项（如 `CURLOPT_MAXFILESIZE`），在应用层限制载荷。
 - `RedisClient` 显式设置 `OPT_READ_TIMEOUT`（默认 10s），不要调低，否则会周期性断连。
 - 诊断日志用 `App\Syslog::error()`，不要直接 `error_log()`；`runtime/logs/system.log` 有 5MB 轮转，不要再整文件 `file()`。
@@ -91,7 +100,7 @@ php vendor/bin/pest --filter=TestName
 
 ## CI / 发布
 
-- CI 主入口在 GitHub Actions：`.github/workflows/` 跑 Pest、composer、PHPStan、架构测试、Swoole 冒烟与 Docker E2E；`.cnb/` 配置保留为可选/历史流水线。
+- CI 主入口在 GitHub Actions：`.github/workflows/` 跑 Pest、composer、PHPStan、架构测试、Swoole 冒烟与 Docker E2E；Hyperf 冒烟任务会安装 Go、编译边车并用 `MONGODB_DRIVER=gotask --large-file` 验证 9 MiB 分块上传；`.cnb/` 配置保留为可选/历史流水线。
 - 平台坑：子配置按「分支 + 事件」合并，整条流水线数组不能用 `!reference`（会静默产出空流水线）；`script` 由 sh/dash 执行，用 `set -eu`，不要用 `pipefail`；`services` 只有 docker/vscode，MongoDB/Redis 需自行 `docker run`，且 dind 与流水线容器网络不通（用同一自定义网络 + 容器名）；`docker:27-cli` 没有 curl/openssl；Stage 的 `if` 不继承，门控写在真正执行任务的 Stage 上。
 - `docker.build` 指定的 Dockerfile 由 CNB 预构建并缓存；Stage 里不要再跑一次 `docker build`（会因缓存包冲突立即失败），用 `${CNB_PIPELINE_DOCKER_IMAGE}` 取已构建镜像。
 - 覆盖率先 `--coverage-clover` 再用 `scripts/clover_to_lcov.php` 转 LCOV。

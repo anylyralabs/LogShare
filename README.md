@@ -2,7 +2,7 @@
 
 面向 Minecraft / Hytale 的服务端日志分享与解析平台。上传日志后返回 7 位短 ID、纯文本访问地址和删除凭证；服务同时使用 Aternos Codex 解析游戏版本、模组加载器与崩溃信息，并在扩展可用时通过 SpinYarn 还原 Fabric / Vanilla 的混淆栈。
 
-后端是 PHP 8.4+、Hyperf 3.2、Swoole 6.2 的常驻协程应用：日志文件写入 MongoDB（TTL 索引滚动过期，autoCompact（若可用）或周期 compact 归还磁盘），Redis 承担读缓存，OpenResty 上的 OpenLiteWaf / OpenLiteStats 子模块负责边缘防护与访问统计。
+后端是 PHP 8.4+、Hyperf 3.2、Swoole 6.2 的常驻协程应用：日志文件写入 MongoDB（TTL 索引滚动过期，autoCompact（若可用）或周期 compact 归还磁盘），MongoDB 网络 I/O 由 GoTask 的 Go 边车承担，避免 ext-mongodb 阻塞 Swoole worker；Redis 承担读缓存，OpenResty 上的 OpenLiteWaf / OpenLiteStats 子模块负责边缘防护与访问统计。
 
 ## 目录
 
@@ -39,6 +39,7 @@
 | --- | --- |
 | 运行时 | PHP >= 8.4（生产镜像使用 PHP 8.5）、Hyperf 3.2、Swoole 6.2 |
 | 数据库 | MongoDB 7.0+，`logs` 父文档 + `log_chunks` 内容分块，TTL + 自动 compact |
+| 数据库访问 | HTTP 路径经 GoTask Go 边车（`hyperf/gotask`）；CLI / 索引 / compact 使用 ext-mongodb |
 | 缓存 | Redis 7.4（可选），只用于读缓存 |
 | 日志解析 | `aternos/codex-minecraft` ^5.1、`aternos/codex-hytale` ^2.0 |
 | 反混淆 | SpinYarn PHP 扩展（可选，Docker 镜像内编译） |
@@ -57,7 +58,7 @@ LogShare/
 │   ├── Controller/             # HTTP 控制器（注解路由）
 │   ├── Storage/                # StorageInterface 与 MongoStorage
 │   ├── Cache/                  # CacheInterface 与 RedisCache
-│   ├── Client/                 # RedisClient、SpinYarnClient
+│   ├── Client/                 # RedisClient、SpinYarnClient、Mongo 网关与 GoTask transport
 │   ├── Filter/                 # 上传前置脱敏过滤器
 │   ├── System/                 # SecurityService、MongoCompactProcess
 │   ├── Data/                   # Token、MetadataEntry
@@ -68,9 +69,10 @@ LogShare/
 │   ├── UploadParser.php        # 文件校验、ZIP 展开、重名处理
 │   ├── Id.php / Config.php     # ID 编解码与配置访问
 │   └── Version.php             # 版本号单一来源
+├── gotask/                     # GoTask MongoDB 边车（Go module）
 ├── docker/
 │   ├── compose.yaml            # nginx / hyperf / mongo / redis / acme
-│   ├── hyperf.Dockerfile       # PHP 8.5 + Swoole + SpinYarn 构建
+│   ├── hyperf.Dockerfile       # PHP 8.5 + Swoole + SpinYarn + GoTask 边车构建
 │   ├── mongo-init.js           # 首次启动创建应用用户
 │   └── nginx/default.conf      # TLS、反向代理、WAF/统计入口
 ├── mappings/                   # Yarn（*.tiny.gz）与 Vanilla（vanilla/*.txt）映射
@@ -91,7 +93,7 @@ LogShare/
 - 运行服务还需要 `ext-swoole`（>= 6.2）、`ext-mongodb`（>= 2.5）；`ext-redis` 用于读缓存，缺失时自动降级；`ext-brotli` 用于 Brotli 请求体与响应压缩，缺失时返回 501。
 - MongoDB 7.0+。TTL 索引负责过期；8.0 且账号有权限时使用 `autoCompact`，否则由应用进程周期 `compact`。单文件内容超过 16 MiB 时由应用拆成 8 MiB 分块写入。
 - Redis 7.x 可选。即使不启用缓存，`Config::validate()` 仍要求 `cache.redis.host` 与端口非空。
-- Composer 2；容器方式需要 Docker 与 Compose 插件。
+- Composer 2；容器方式需要 Docker 与 Compose 插件。Go 1.24+ 仅在本地构建 GoTask 边车时需要，Docker 镜像由多阶段构建自动完成。
 
 ### 本地运行
 
@@ -106,6 +108,16 @@ mongod --dbpath ./tmp/mongo-data
 php scripts/init_mongodb.php
 
 # 按需在 .env 或进程环境中设置 MONGODB_URI / MONGODB_DATABASE
+php bin/hyperf.php start
+```
+
+本地默认使用 `MONGODB_DRIVER=native`，不需要 Go 工具链。需要本地验证 GoTask 路径时：
+
+```bash
+./scripts/build_gotask.sh
+export GOTASK_ENABLE=true
+export MONGODB_DRIVER=gotask
+export GOTASK_SOCKET="$(pwd)/runtime/gotask.sock"
 php bin/hyperf.php start
 ```
 
@@ -140,6 +152,8 @@ docker compose --env-file .env -f docker/compose.yaml up -d
 ```
 
 Compose 使用 `mongo:7.0` 以兼容 ARM64 39-bit VA 内核；首次启动由 `docker/mongo-init.js` 创建 `logshare` 应用用户（`readWrite` + `dbAdmin`）。启动后执行 `php scripts/init_mongodb.php` 初始化索引/TTL，`MongoCompactProcess` 负责周期压缩。MongoDB 8.0 且账号具备 `autoCompact` 权限时会自动启用，否则同样走 compact 进程。
+
+`hyperf` 镜像会同时编译 `/app/bin/logshare-gotask`，Compose 固定设置 `MONGODB_DRIVER=gotask`、`GOTASK_ENABLE=true`，上传/读取等 HTTP 请求不再直接调用 ext-mongodb。索引、TTL、compact 仍由启动脚本和独立进程使用原生驱动，不占用 worker。
 
 | 服务 | 说明 |
 | --- | --- |
@@ -184,7 +198,7 @@ Config::GetPath('urls.apiBaseUrl'); // 嵌套项
 | --- | --- | --- |
 | `storage` | 存储后端、保留时长与上传限制 | `storages`、`storageId`、`storageTime`、`uploadFiles` |
 | `codex` | Codex 日志翻译语言 | `language` |
-| `mongo` | MongoDB 连接与磁盘回收 | `url`、`database`、`autoCompact`、`freeSpaceTargetMB`、`compactInterval`、连接超时 |
+| `mongo` | MongoDB 连接、访问驱动与磁盘回收 | `url`、`database`、`driver`、`autoCompact`、`freeSpaceTargetMB`、`compactInterval`、连接超时 |
 | `cache` | Redis 缓存 | `cacheId`、`enabled`、`redis`、`ttl`、`maxSize` |
 | `id` | 短 ID 字符集与长度 | `characters`、`length` |
 | `filter` | 上传前置过滤器链 | `pre` |
@@ -199,6 +213,7 @@ Config::GetPath('urls.apiBaseUrl'); // 嵌套项
 - `storage.storageTime`：`604800` 秒（7 天）。
 - `codex.language`：`zh-CN`（简体中文）；可改为 `zh-TW` 或 `en`。
 - `storage.uploadFiles.maxFiles`：200；`maxTotalBytes`：20 MiB；`maxRequestBodyBytes`：32 MiB。
+- `mongo.driver`：`native`（默认，同步阻塞，仅 CLI / 测试 / 回滚）或 `gotask`（HTTP 运行时使用 Go 边车）。
 - `mongo.compactInterval`：21,600 秒（6 小时），MongoDB 7.x / autoCompact 不可用时由 `MongoCompactProcess` 执行 `compact`。
 - `cache.ttl`：1,800 秒；`cache.maxSize`：5 MiB（全部文件合计）。
 - `id.length`：6；对外 ID 为 1 位存储标识编码 + 6 位随机字符，共 7 位。
@@ -213,6 +228,10 @@ Config::GetPath('urls.apiBaseUrl'); // 嵌套项
 | `APP_NAME` | Hyperf 应用名，默认 `logshare` |
 | `SCAN_CACHEABLE` | 是否缓存注解扫描结果 |
 | `MONGODB_URI` / `MONGODB_DATABASE` | MongoDB 连接 URI 与数据库名 |
+| `MONGODB_DRIVER` | 覆盖 `mongo.driver`：`native` 或 `gotask` |
+| `GOTASK_ENABLE` | 是否启动 GoTask 边车；生产 Compose 固定为 `true` |
+| `GOTASK_SOCKET` / `GOTASK_EXECUTABLE` | 自定义边车 Unix socket 与二进制路径 |
+| `MONGODB_CONNECT_TIMEOUT` / `MONGODB_READ_WRITE_TIMEOUT` | Go 边车连接与单次命令超时，如 `5s`、`120s` |
 | `CODEX_LANGUAGE` | 覆盖 `codex.language`，如 `zh-CN`、`zh-TW`、`en` |
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_TIMEOUT` / `REDIS_PASSWORD` | 覆盖 `cache.redis` |
 | `STORAGE_TIME` | 覆盖 `storage.storageTime`（秒） |
@@ -225,7 +244,7 @@ Config::GetPath('urls.apiBaseUrl'); // 嵌套项
 启动阶段会检查：
 
 - `storage.storageTime > 0`。
-- `mongo.url` 必须是 `mongodb://` 或 `mongodb+srv://`，`mongo.database` 非空。
+- `mongo.url` 必须是 `mongodb://` 或 `mongodb+srv://`，`mongo.database` 非空，`mongo.driver` 只能是 `native` 或 `gotask`。
 - `cache.redis.host` 非空且端口大于 0。
 - `filter.pre` 中每个类存在且继承 `App\Filter\Filter`。
 - `storage.storages.*.class` 存在且实现 `App\Storage\StorageInterface`。
@@ -413,7 +432,7 @@ curl https://api.logshare.cn/v1/limits
 3. 校验 `files` 或旧版 `content` 至少有一个，检查客户端 IP 是否在配置、Redis、本地封禁文件或 WAF 快照中。
 4. `Log::put()` 对每个文件执行前置过滤链，识别 Minecraft 日志并尝试 SpinYarn 反混淆；反混淆失败按原文保留。
 5. 反混淆阶段识别出的第一份 Minecraft 日志可补全 `version` / `loader` 元数据；客户端显式提交的同名键优先。
-6. `MongoStorage::Put()` 计算 `xxh128` 指纹，先写 `pending` 父文档占住 ID，再写内容分块，最后把父文档置为 `ready`；主存储成功后按大小决定是否写 Redis 缓存。去重命中时不写缓存。
+6. `MongoStorage::Put()` 通过 `MongoGateway` 计算 `xxh128` 指纹，先写 `pending` 父文档占住 ID，再按约 4 MiB 分批写内容分块，最后把父文档置为 `ready`；主存储成功后按大小决定是否写 Redis 缓存。去重命中时不写缓存。
 7. 返回 200，响应包含 ID、文件列表、`filesUrl`、顶层 `raw`、token 与 `deduplicated`。全文 Codex 分析不会在这里执行。
 
 ### 读取
@@ -435,7 +454,16 @@ curl https://api.logshare.cn/v1/limits
 
 父文档先以 `status=pending` 占住 `_id`，分块写完后才切换为 `ready`。读取只认 `ready`，因此写入中断不会暴露半条日志；pending 文档和分块由 TTL 兜底回收。`metadata` 与文件描述嵌在父文档中，父文档体积很小；20 MiB 单文件会被拆成最多 3 个分块，规避 MongoDB 16 MiB BSON 文档上限。
 
-> `ext-mongodb` 基于 libmongoc，Swoole 的协程 hook 无法拦截其网络 I/O；大文件写入会同步占用当前 worker。当前版本使用直连实现，上线前应做并发压测；若阻塞成为瓶颈，再评估 RemoteObject/GoTask 方案。
+### MongoDB 访问路径
+
+`ext-mongodb` 基于 libmongoc，Swoole 的协程 hook 无法拦截其网络 I/O；直接在 worker 内调用会在慢查询或大文件写入时占住整个 worker。因此 HTTP 请求路径统一经过 `App\Client\Mongo\MongoGateway`：
+
+- `mongo.driver=gotask` 时使用 `GoTaskGateway`，业务数组经 BSON 编码后通过 Unix socket 交给 Go 边车，Go 侧使用官方 `mongo-driver` 执行增删改查；
+- `mongo.driver=native` 时使用 `NativeGateway`，只用于 CLI、单元测试和紧急回滚；
+- `ensureIndexes()`、`autoCompact`、`compactCollections()`、`ping()` 等运维方法保留原生驱动，仅由启动脚本和 `MongoCompactProcess` 调用；
+- 分块写入按 `CHUNK_BATCH_BYTES`（约 4 MiB）分批，避免一次 IPC 传输 20 MiB；
+- `App\Client\GoTask\ReliableCoroutineSocketRelay` 会循环写满 Goridge frame，修复上游 `SocketTransporter::send()` 在数百 KB 以上 payload 时只写一部分的问题；
+- 边车不可用时返回 `503` + `Retry-After`，不会静默回退到会阻塞 worker 的原生驱动。
 
 ### ID 与去重
 
@@ -566,14 +594,16 @@ php vendor/bin/pest --filter=Token
 - 常驻进程内的 cURL 调用应设置 `CURLOPT_FORBID_REUSE` 并在 `finally` 中释放句柄，避免 FD 累积。
 - 仓库未配置统一格式化工具，提交前至少运行相关 Pest 用例、架构测试与 PHPStan。
 
-CI 位于 `.github/workflows/`：PHP 8.4 / 8.5 测试矩阵、PHPStan、架构测试，以及 Hyperf + Swoole 启动冒烟。发布流水线在 `main` 分支收到以 `[Build]` 开头的提交信息（或手动触发）时运行测试与静态分析，并按版本号创建 tag 与 Release。
+CI 位于 `.github/workflows/`：PHP 8.4 / 8.5 测试矩阵、PHPStan、架构测试，以及 Hyperf + Swoole 启动冒烟。Hyperf 冒烟任务会额外安装 Go、编译 GoTask 边车，并用 `MONGODB_DRIVER=gotask --large-file` 跑 9 MiB 分块上传与读取；Docker E2E 同样走 GoTask。发布流水线在 `main` 分支收到以 `[Build]` 开头的提交信息（或手动触发）时运行测试与静态分析，并按版本号创建 tag 与 Release。
 
 ## 运维脚本
 
 | 脚本 | 用途 |
 | --- | --- |
 | `scripts/init_mongodb.php` | 创建/同步 MongoDB 索引、TTL，并启用可用的磁盘回收能力 |
-| `scripts/ci_e2e_test.php` | 对真实实例执行端到端冒烟，支持 `--base-url` 与 `--waf-test` |
+| `scripts/build_gotask.sh` | 本地编译 GoTask MongoDB 边车到 `bin/logshare-gotask` |
+| `scripts/bench_api.php` | 上传/读取并发基准，支持并发数、迭代次数与文件大小 |
+| `scripts/ci_e2e_test.php` | 对真实实例执行端到端冒烟，支持 `--base-url`、`--waf-test` 与 `--large-file` |
 | `scripts/test_online_apis.php` | 经 `127.0.0.1` 与指定 Host 探测线上接口 |
 | `scripts/test_endpoints_host.sh` | 用 curl 批量检查端点状态码 |
 | `scripts/download_mappings.sh` | 下载 Fabric Yarn 映射到 `mappings/` |
