@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Storage;
 
+use App\Client\Mongo\MongoGateway;
 use App\Client\MongoDBClient;
 use App\Data\Fingerprint;
 use App\Data\Token;
@@ -23,6 +24,10 @@ use MongoDB\Driver\Exception\CommandException;
  * 父文档和分块都带 created 字段，MongoDB TTL 索引负责过期删除。读取时会
  * 按 storageTime 过滤，因此即使 TTL 监控尚未真正删除，逻辑过期数据也不会
  * 返回给客户端。
+ *
+ * Put/Get/Renew/Delete 走 MongoGateway：HTTP 运行时是 GoTask 边车，测试/
+ * CLI 可以走原生驱动。ensureIndexes、compact、ping 等运维方法保留原生
+ * ext-mongodb，只应由启动脚本或独立进程调用，不要放进 HTTP worker。
  */
 class MongoStorage implements StorageInterface
 {
@@ -99,8 +104,7 @@ class MongoStorage implements StorageInterface
      */
     private static function insertLog(string $rawId, array $files, ?Token $token, array $metadata, string $source, string $fingerprint): void
     {
-        $logs = MongoDBClient::collection(self::COLLECTION_LOGS);
-        $chunks = MongoDBClient::collection(self::COLLECTION_CHUNKS);
+        $gateway = MongoGateway::get();
         $created = new UTCDateTime(time() * 1000);
 
         // 先占住 _id，再写分块。这样即使 ID 撞车，也不会把新分块写进
@@ -115,7 +119,7 @@ class MongoStorage implements StorageInterface
         if ($token !== null) {
             $document['token'] = $token->get();
         }
-        $logs->insertOne($document);
+        $gateway->insertMany(self::COLLECTION_LOGS, [$document]);
 
         try {
             $descriptors = [];
@@ -143,9 +147,7 @@ class MongoStorage implements StorageInterface
                 }
             }
 
-            if ($chunkDocuments !== []) {
-                $chunks->insertMany($chunkDocuments);
-            }
+            $gateway->insertMany(self::COLLECTION_CHUNKS, $chunkDocuments);
 
             $metadataRows = [];
             $seenKeys = [];
@@ -159,7 +161,8 @@ class MongoStorage implements StorageInterface
                 $metadataRows[] = $serialized;
             }
 
-            $result = $logs->updateOne(
+            $matched = $gateway->updateOne(
+                self::COLLECTION_LOGS,
                 ['_id' => $rawId, 'status' => self::STATUS_PENDING],
                 ['$set' => [
                     'status' => self::STATUS_READY,
@@ -168,7 +171,7 @@ class MongoStorage implements StorageInterface
                 ]]
             );
 
-            if ($result->getMatchedCount() !== 1) {
+            if ($matched !== 1) {
                 throw new \RuntimeException('Failed to finalize MongoDB log document.');
             }
         } catch (\Throwable $e) {
@@ -180,8 +183,9 @@ class MongoStorage implements StorageInterface
     private static function cleanupPartial(string $rawId): void
     {
         try {
-            MongoDBClient::collection(self::COLLECTION_CHUNKS)->deleteMany(['log_id' => $rawId]);
-            MongoDBClient::collection(self::COLLECTION_LOGS)->deleteOne([
+            $gateway = MongoGateway::get();
+            $gateway->deleteMany(self::COLLECTION_CHUNKS, ['log_id' => $rawId]);
+            $gateway->deleteOne(self::COLLECTION_LOGS, [
                 '_id' => $rawId,
                 'status' => self::STATUS_PENDING,
             ]);
@@ -211,7 +215,8 @@ class MongoStorage implements StorageInterface
 
     private static function findByFingerprint(string $fingerprint): ?Id
     {
-        $document = self::asArray(MongoDBClient::collection(self::COLLECTION_LOGS)->findOne(
+        $document = MongoGateway::get()->findOne(
+            self::COLLECTION_LOGS,
             [
                 'fingerprint' => $fingerprint,
                 'status' => self::STATUS_READY,
@@ -221,7 +226,7 @@ class MongoStorage implements StorageInterface
                 'sort' => ['created' => -1],
                 'projection' => ['_id' => 1],
             ]
-        ));
+        );
 
         return $document === null
             ? null
@@ -230,10 +235,11 @@ class MongoStorage implements StorageInterface
 
     private static function idExists(string $rawId): bool
     {
-        return self::asArray(MongoDBClient::collection(self::COLLECTION_LOGS)->findOne(
+        return MongoGateway::get()->findOne(
+            self::COLLECTION_LOGS,
             ['_id' => $rawId],
             ['projection' => ['_id' => 1]]
-        )) !== null;
+        ) !== null;
     }
 
     /**
@@ -242,11 +248,11 @@ class MongoStorage implements StorageInterface
     public static function Get(Id $id, bool $includeContent = true): ?array
     {
         $rawId = $id->getRaw();
-        $document = self::asArray(MongoDBClient::collection(self::COLLECTION_LOGS)->findOne([
+        $document = MongoGateway::get()->findOne(self::COLLECTION_LOGS, [
             '_id' => $rawId,
             'status' => self::STATUS_READY,
             'created' => ['$gt' => self::logicalCutoff()],
-        ]));
+        ]);
 
         if ($document === null) {
             return null;
@@ -257,15 +263,12 @@ class MongoStorage implements StorageInterface
 
         $chunksByFile = [];
         if ($includeContent) {
-            $cursor = MongoDBClient::collection(self::COLLECTION_CHUNKS)->find(
+            $chunks = MongoGateway::get()->find(
+                self::COLLECTION_CHUNKS,
                 ['log_id' => $rawId],
                 ['sort' => ['file_index' => 1, 'seq' => 1]]
             );
-            foreach ($cursor as $chunkDocument) {
-                $chunk = self::asArray($chunkDocument);
-                if ($chunk === null) {
-                    continue;
-                }
+            foreach ($chunks as $chunk) {
                 $fileIndex = (int) $chunk['file_index'];
                 $seq = (int) $chunk['seq'];
                 $chunksByFile[$fileIndex][$seq] = (string) $chunk['data'];
@@ -314,44 +317,45 @@ class MongoStorage implements StorageInterface
     public static function Renew(Id $id): bool
     {
         $rawId = $id->getRaw();
-        $logs = MongoDBClient::collection(self::COLLECTION_LOGS);
+        $gateway = MongoGateway::get();
 
-        $exists = self::asArray($logs->findOne(
+        $exists = $gateway->findOne(
+            self::COLLECTION_LOGS,
             [
                 '_id' => $rawId,
                 'status' => self::STATUS_READY,
                 'created' => ['$gt' => self::logicalCutoff()],
             ],
             ['projection' => ['_id' => 1]]
-        ));
+        );
         if ($exists === null) {
             return false;
         }
 
         $now = new UTCDateTime(time() * 1000);
-        MongoDBClient::collection(self::COLLECTION_CHUNKS)->updateMany(
+        $gateway->updateMany(
+            self::COLLECTION_CHUNKS,
             ['log_id' => $rawId],
             ['$set' => ['created' => $now]]
         );
 
-        $result = $logs->updateOne(
+        return $gateway->updateOne(
+            self::COLLECTION_LOGS,
             ['_id' => $rawId, 'status' => self::STATUS_READY],
             ['$set' => ['created' => $now]]
-        );
-
-        return $result->getMatchedCount() > 0;
+        ) > 0;
     }
 
     public static function Delete(Id $id): bool
     {
         $rawId = $id->getRaw();
-        $result = MongoDBClient::collection(self::COLLECTION_LOGS)->deleteOne(['_id' => $rawId]);
-        if ($result->getDeletedCount() === 0) {
+        $gateway = MongoGateway::get();
+        if ($gateway->deleteOne(self::COLLECTION_LOGS, ['_id' => $rawId]) === 0) {
             return false;
         }
 
         try {
-            MongoDBClient::collection(self::COLLECTION_CHUNKS)->deleteMany(['log_id' => $rawId]);
+            $gateway->deleteMany(self::COLLECTION_CHUNKS, ['log_id' => $rawId]);
         } catch (\Throwable $e) {
             // 父文档已删，分块会由 TTL 兜底，不应该让删除接口误报失败。
             \App\Syslog::error('MongoStorage', 'chunk deletion failed: ' . $e->getMessage());
@@ -365,12 +369,11 @@ class MongoStorage implements StorageInterface
      */
     public static function UpgradeToken(Id $id, string $normalizedToken): bool
     {
-        $result = MongoDBClient::collection(self::COLLECTION_LOGS)->updateOne(
+        return MongoGateway::get()->updateOne(
+            self::COLLECTION_LOGS,
             ['_id' => $id->getRaw()],
             ['$set' => ['token' => $normalizedToken]]
-        );
-
-        return $result->getMatchedCount() > 0;
+        ) > 0;
     }
 
     /**
@@ -612,34 +615,6 @@ class MongoStorage implements StorageInterface
             }
             throw $e;
         }
-    }
-
-    /**
-     * 统一把 MongoDB 返回的 array|object 文档归一化为数组。
-     *
-     * 连接配置了 typeMap=array，正常情况下已经是数组；这里保留对象兜底，
-     * 同时让静态分析获得确定的 array 类型。
-     *
-     * @return array<array-key, mixed>|null
-     */
-    private static function asArray(mixed $document): ?array
-    {
-        if ($document === null) {
-            return null;
-        }
-        if (is_array($document)) {
-            return $document;
-        }
-        if ($document instanceof \MongoDB\Model\BSONDocument) {
-            return $document->getArrayCopy();
-        }
-        if ($document instanceof \MongoDB\Model\BSONArray) {
-            return $document->getArrayCopy();
-        }
-        if ($document instanceof \stdClass) {
-            return get_object_vars($document);
-        }
-        return null;
     }
 
     private static function isDuplicateKeyError(\Throwable $e): bool
