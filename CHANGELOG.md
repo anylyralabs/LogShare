@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.8.8 — 2026-11-02
+
+### 修复
+
+- **Docker 内 GoTask socket 权限**：`/app/runtime` 是宿主机 bind mount，属主可能与容器进程 euid 不一致，导致边车因 `socket directory is not writable` 反复退出。Compose 将 `GOTASK_SOCKET` 固定到容器内 `/tmp/logshare-gotask.sock`。
+- **生产 E2E 大文件超时**：9 MiB 上传经公网 HTTPS 回环可能超过 15 秒；E2E 的请求超时放宽到 120 秒，连接超时单独保持 10 秒。
+
 ## 1.8.7 — 2026-11-02
 
 ### 变更

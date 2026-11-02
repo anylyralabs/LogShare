@@ -35,7 +35,10 @@ function httpRequest(string $method, string $url, array $headers = [], ?string $
     curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_HEADER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+    // 9 MiB 大文件经公网 HTTPS 回环可能超过 15s，统一放宽到 120s；
+    // 连接阶段单独限制，避免目标不可达时长时间占用。
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 120);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
     curl_setopt($ch, CURLOPT_FORBID_REUSE, true);

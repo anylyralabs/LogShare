@@ -90,6 +90,10 @@ services:
       # 不会静默回退到会阻塞 Swoole worker 的原生驱动。
       MONGODB_DRIVER: gotask
       GOTASK_ENABLE: "true"
+      # /app/runtime 是宿主机 bind mount，属主可能是宿主用户；GoTask 的
+      # socket 目录检查要求目录属主与容器进程 euid 一致。放到容器内 /tmp，
+      # 避免 Docker 部署时边车因 runtime 目录权限反复退出。
+      GOTASK_SOCKET: /tmp/logshare-gotask.sock
       MONGODB_CONNECT_TIMEOUT: 5s
       MONGODB_READ_WRITE_TIMEOUT: 120s
       REDIS_HOST: redis
