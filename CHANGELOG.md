@@ -1,10 +1,10 @@
 # Changelog
 
-## 1.8.5 — 2026-11-01
+## 1.8.6 — 2026-11-02
 
 ### 变更
 
-- **纯文件模型**：上传只接受 `files`，移除 `content` 正文、主文件与旧日志兼容；所有内容由 `log_chunks` 承载。
+- **纯文件模型**：主存储以 `log_chunks` 中的文件集合作为唯一内容模型；新客户端只提交 `files`，旧版 `content` 保留为兼容入口并映射为主文件。
 - **存储迁移到 MongoDB**：`logs` 父文档保存 token、来源、指纹、metadata 与文件描述，文件内容按 8 MiB 分块写入 `log_chunks`，规避 BSON 16 MiB 限制。`created` TTL 索引实现滚动过期；`autoCompact` 可用时使用内置压缩，否则由 `MongoCompactProcess` 周期性 `compact`，自动压缩并归还磁盘；移除 MariaDB 分区、Event 与 `mariadb-events` 容器。
 - **移除异步事件队列**：删除 EventQueue、Redis Streams 消费者、安全审核 handler 与反混淆 handler；上传时逐文件同步执行 SpinYarn 反混淆。
 - **移除应用层内容审核**：不再加载关键词/正则内容规则；内容防护由边缘 OpenLiteWaf 承担。
