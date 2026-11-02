@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "LogShare API",
-    "description": "LogShare 1.8.8_supplement.1 file-based API collection.",
+    "description": "LogShare 1.8.8_fix.1 file-based API collection.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [

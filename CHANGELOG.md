@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.8.8_fix.1 — 2026-11-02
+
+### 修复
+
+- **公开 metadata 不再混入后端派生字段**：`Log::deriveEcosystemMetadata()` 生成的 `version` / `loader` 标记为 `visible=false`，仅保留在存储中供内部统计；`GET /v1/log/{id}` 不再返回它们，避免与 Codex `Detected` 信息重复。
+- **客户端 metadata 可见性保持**：客户端显式提交同名 `version` / `loader` 时仍以客户端值为准，并按客户端的 `visible` 标志公开。
+- 补充 API/README/OpenAPI 说明与回归测试。
+
 ## 1.8.8_supplement.1 — 2026-11-02
 
 ### 新增
