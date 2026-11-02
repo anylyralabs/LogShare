@@ -14,7 +14,17 @@ WORKDIR /spinyarn
 # 仅编译 C ABI 库（PHP 扩展的链接对象），不编 Web binary（Axum 服务本镜像用不到）
 RUN cargo build --release -p spinyarn-capi
 
-# 阶段 2：最终镜像（php:8.5-cli，Hyperf 常驻进程）
+# 阶段 2：编译 GoTask MongoDB 边车
+# 只编译不运行，最终镜像不包含 Go 工具链；CGO_ENABLED=0 生成静态二进制，
+# 避免运行阶段还需要额外共享库。
+FROM golang:1.24-bookworm AS gotask-builder
+WORKDIR /src
+COPY gotask/go.mod gotask/go.sum ./
+RUN go mod download
+COPY gotask/ ./
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/logshare-gotask ./cmd/logshare-gotask
+
+# 阶段 3：最终镜像（php:8.5-cli，Hyperf 常驻进程）
 FROM php:8.5.0-cli-bookworm
 
 # Composer（安装项目依赖用）
@@ -75,6 +85,12 @@ WORKDIR /app
 COPY composer.json composer.lock ./
 RUN composer install --no-dev --prefer-dist --no-progress --no-interaction
 COPY . .
+
+# GoTask 边车：PHP worker 通过 Unix socket 调用，MongoDB 网络 I/O 在 Go 进程
+# 中执行，避免 ext-mongodb 阻塞 Swoole worker。必须在 COPY . . 之后复制，
+# 否则会被宿主机上的 bin 目录覆盖。
+COPY --from=gotask-builder /out/logshare-gotask /app/bin/logshare-gotask
+RUN chmod 755 /app/bin/logshare-gotask
 
 # 映射目录：/app/mappings（compose 以 bind mount 挂载宿主机 ./mappings，映射表由
 # 下载脚本 scripts/download_mappings.sh + download_vanilla_mappings.py 预先生成）

@@ -1,4 +1,5 @@
 .git
+bin/logshare-gotask
 .gitignore
 .env*
 .github
