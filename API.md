@@ -96,7 +96,7 @@ POST /v1/log
 - 同名文件会自动改名为 `name (2).ext`、`name (3).ext`。
 - 内容去重按「按名称排序的文件集合 + `source`」计算指纹；命中时直接返回既有 ID，`deduplicated: true`。
 
-> **metadata 很重要，不是可选装饰。** 请尽量提供 `version`、`loader`、`launcher`、`modpack`、崩溃上下文等结构化字段；`GET /v1/log/{id}` 会展示这些信息（`visible=false` 除外），后续分析、排查与统计都会依赖它。
+> **metadata 很重要，不是可选装饰。** 请尽量提供 `version`、`loader`、`launcher`、`modpack`、崩溃上下文等结构化字段；`GET /v1/log/{id}` 只展示客户端提交且 `visible=true` 的条目（`visible=false` 除外）。后端从日志识别出的 `version` / `loader` 仅作为内部统计字段保存，不会回填到公开 metadata。
 
 **响应：**
 

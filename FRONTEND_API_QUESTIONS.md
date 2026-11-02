@@ -117,6 +117,7 @@
 23. 行为仍然是：
     - 重复 `key` 保留首次出现的条目；
     - `visible=false` 的条目不会出现在 `GET /v1/log/{id}` 的公开 `metadata` 中；
+    - 后端从 Fabric/其它日志识别出的 `version` / `loader` 只作为内部统计字段保存（`visible=false`），不会回填到公开 metadata；客户端显式提交的同名条目仍按客户端 `visible` 值返回；
     - 超过 100 条时只保留前 100 条有效条目，后续丢弃。
 
 24. `source`：

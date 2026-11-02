@@ -310,7 +310,7 @@ curl -X POST https://api.logshare.cn/v1/log \
 - `.zip` 会逐条流式解压，并检查路径穿越、控制字符、超长文件名与解压膨胀。
 - 同名文件会重命名为 `名字 (2).扩展名`、`名字 (3).扩展名`，避免与数据库主键冲突。
 - 每个文件独立经过 `filter.pre` 过滤链并尝试 SpinYarn 反混淆；不会执行全文 Codex 分析。
-- **metadata 很重要**：请尽量提交 `version`、`loader`、`launcher`、`modpack` 与崩溃上下文；`GET /v1/log/{id}` 会展示（`visible=false` 除外），分析与排查会依赖这些字段。
+- **metadata 很重要**：请尽量提交 `version`、`loader`、`launcher`、`modpack` 与崩溃上下文；`GET /v1/log/{id}` 只展示客户端提交且 `visible=true` 的条目。后端从日志识别出的 `version` / `loader` 只作为内部统计字段保存，不会回填到公开 metadata。
 - 来源与按名称排序的文件集合共同计算 `xxh128` 指纹；命中已有指纹时直接返回旧 ID，并带 `deduplicated: true`。去重不会写入新的删除凭证。
 
 成功响应：
@@ -432,7 +432,7 @@ curl https://api.logshare.cn/v1/limits
 2. `ContentParser` 读取请求体，先检查原始大小，再按 `Content-Encoding` 逆序解压，最后解析 JSON 或表单。
 3. 校验 `files` 或旧版 `content` 至少有一个，检查客户端 IP 是否在配置、Redis、本地封禁文件或 WAF 快照中。
 4. `Log::put()` 对每个文件执行前置过滤链，识别 Minecraft 日志并尝试 SpinYarn 反混淆；反混淆失败按原文保留。
-5. 反混淆阶段识别出的第一份 Minecraft 日志可补全 `version` / `loader` 元数据；客户端显式提交的同名键优先。
+5. 反混淆阶段识别出的第一份 Minecraft 日志可补全内部 `version` / `loader` 统计字段（`visible=false`，不进入公开 metadata）；客户端显式提交的同名键优先，并保留客户端自己的可见性。
 6. `MongoStorage::Put()` 通过 `MongoGateway` 计算 `xxh128` 指纹，先写 `pending` 父文档占住 ID，再按约 4 MiB 分批写内容分块，最后把父文档置为 `ready`；主存储成功后按大小决定是否写 Redis 缓存。去重命中时不写缓存。
 7. 返回 200，响应包含 ID、文件列表、`filesUrl`、顶层 `raw`、token 与 `deduplicated`。全文 Codex 分析不会在这里执行。
 

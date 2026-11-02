@@ -604,6 +604,9 @@ components:
       description: |
         Structured metadata is an important analysis input. Clients should submit
         fields such as version, loader, launcher, modpack and crash context.
+        Backend-derived version/loader fields are stored with visible=false and are
+        not returned in public metadata responses; only client-submitted visible
+        entries are exposed.
       properties:
         key:
           type: string

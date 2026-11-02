@@ -47,6 +47,26 @@ test('non minecraft logs gain no ecosystem metadata', function () {
     expect(ecosystemDerivePairs(PLAIN_LOG))->toBe([]);
 });
 
+
+test('derived ecosystem entries are hidden from public metadata', function () {
+    $log = new Log();
+    $detected = $log->analyseContent(FABRIC_LOG);
+    (new ReflectionProperty(Log::class, 'detectedLog'))->setValue($log, $detected);
+
+    $client = (new MetadataEntry())->setKey('version')->setValue('1.20.1')->setLabel('游戏版本');
+    /** @var MetadataEntry[] $entries */
+    $entries = (new ReflectionMethod(Log::class, 'deriveEcosystemMetadata'))->invoke($log, [$client]);
+
+    $byKey = [];
+    foreach ($entries as $entry) {
+        $byKey[(string) $entry->getKey()] = $entry;
+    }
+
+    expect($byKey['version']->isVisible())->toBeTrue();
+    expect($byKey['loader']->isVisible())->toBeFalse();
+    expect(array_column(MetadataEntry::serializeVisible($entries), 'key'))->toBe(['version']);
+});
+
 test('derived entries carry display labels the clients render directly', function () {
     $log = new Log();
     $detected = $log->analyseContent(FABRIC_LOG);

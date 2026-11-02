@@ -164,6 +164,26 @@ test('LogMetaController returns metadata and the file list', function () {
     expect($body['files'][0])->toHaveKeys(['name', 'size', 'lines', 'raw', 'insights']);
 });
 
+test('LogMetaController hides backend-derived ecosystem metadata', function () {
+    $mockUri = Mockery::mock(\Psr\Http\Message\UriInterface::class);
+    $mockUri->shouldReceive('getPath')->andReturn('/v1/log/f123456');
+    $mockReq = Mockery::mock(RequestInterface::class);
+    $mockReq->shouldReceive('getUri')->andReturn($mockUri);
+
+    $controller = instantiateController(LogMetaController::class, $mockReq);
+
+    $log = new Log();
+    $id = $log->put([
+        ['name' => 'latest.log', 'data' => "[12:00:00] [main/INFO] (FabricLoader/GameProvider) Loading Minecraft 1.20.4 with Fabric Loader 0.15.6\n"],
+    ], null, [
+        (new \App\Data\MetadataEntry())->setKey('launcher')->setValue('HMCL')->setVisible(true),
+    ], 'fabric-check/1.0');
+
+    $body = json_decode((string) $controller->meta($id->get())->getBody(), true);
+    expect($body['metadata'])->toHaveCount(1);
+    expect($body['metadata'][0]['key'])->toBe('launcher');
+});
+
 test('LogController accepts legacy content upload and returns a raw link', function () {
     $payload = json_encode([
         'content' => "Legacy main log\n",

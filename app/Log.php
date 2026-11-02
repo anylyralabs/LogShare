@@ -326,6 +326,7 @@ class Log
      * 用上传期识别出的 Minecraft 版本与 Mod Loader 补全生态统计元数据。
      *
      * 只使用反混淆阶段已经识别出的第一份日志，不额外跑全文分析。
+     * 派生条目 visible=false，仅供内部统计/展示层参考，不进入公开 metadata；
      * 客户端显式提交同名键时一律以客户端值为准。
      *
      * @param MetadataEntry[] $metadata
@@ -358,7 +359,8 @@ class Log
             $entry = (new MetadataEntry())
                 ->setKey($key)
                 ->setValue($item['value'])
-                ->setLabel($item['label']);
+                ->setLabel($item['label'])
+                ->setVisible(false);
             if ($entry->isValid()) {
                 $metadata[] = $entry;
             }
