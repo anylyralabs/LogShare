@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: LogShare API
-  version: 1.8.8_fix.1
+  version: 1.8.8_hotfix.1
   description: |
     Minecraft / Hytale log sharing platform.
 
