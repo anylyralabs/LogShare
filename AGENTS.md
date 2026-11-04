@@ -9,7 +9,7 @@
 - 存储后端固定为 MongoDB（`storage.storageId` = `m`）；日志 ID 首字符为存储标识。Redis 不是硬依赖，缺失时读缓存降级。
 - MongoDB 访问分两条路径：HTTP CRUD 经 `App\Client\Mongo\MongoGateway`（生产为 GoTask 边车）；索引 / TTL / compact / ping 由 `MongoStorage` 保留的运维方法走 ext-mongodb，只在 CLI 与独立进程调用。
 - `gotask/` 是独立 Go module，编译 `bin/logshare-gotask`；`app/Client/GoTask/` 是可靠的 Goridge 传输实现（循环写满 frame），`config/autoload/gotask.php` 控制边车生命周期。
-- `OpenLiteWaf/`（当前 1.3.1）、`OpenLiteStats/`（当前 1.2.0）是独立仓库的 git submodule（GitHub `anylyralabs/*`），有自己的测试与发布流程；改动需在各自仓库提交，再回主仓更新指针。
+- `OpenLiteWaf/`（当前 1.3.1）、`OpenLiteStats/`（当前 1.3.0）是独立仓库的 git submodule（GitHub `anylyralabs/*`），有自己的测试与发布流程；改动需在各自仓库提交，再回主仓更新指针。`OpenLiteStats` 现在同时提供边缘统计、前端 `/stats/collect` 采集端点与 `sdk/` TypeScript SDK（Vue 3 CSR/SSG、Web Vitals、错误）。
 - 参考文档：`OpenLiteWaf/README.md`、`docs/`、`CHANGELOG.md`；`LOCAL_DEV_NOTES.md` 仅本地、被 `.git/info/exclude` 排除，永不提交。
 
 ## 开发命令
@@ -35,6 +35,7 @@ php vendor/bin/pest --filter=TestName
 - 集成环境：先由 `.env.example` 准备 `.env`，再 `docker compose --env-file .env -f docker/compose.yaml up -d`。
 - `RedisClient::setTestConnection()` 可让 Redis 相关单测固定走 `RedisMock`；压缩请求用例需要 ext-brotli（CI 已装）。
 - Lua 回归：`php OpenLiteWaf/tests/openlitewaf_regex_test.php`、`lua5.1 OpenLiteWaf/tests/openlitewaf_logic_test.lua`、`lua5.1 OpenLiteStats/tests/openlitestats_logic_test.lua`、`luac5.1 -p OpenLiteWaf/lua/*.lua OpenLiteStats/lua/*.lua`。两套 Lua 测试 stub 了 `ngx`，只能验证流程/计数/作用域，真实 `ngx.re` 与请求体覆盖在 E2E。
+- 前端 SDK 回归：`cd OpenLiteStats/sdk && pnpm typecheck && pnpm test && pnpm build`；`sdk/dist` 是提交的部署产物，改源码后必须重建。SDK 版本必须与 `OpenLiteStats/lua/openlitestats.lua` 的 `_VERSION` 一致。
 - 修改 Go 代码后跑 `cd gotask && go vet ./... && go build ./cmd/logshare-gotask`；CI 会安装 Go 1.24 并编译边车。
 - 仓库没有配置 formatter；改完代码至少跑相关 Pest、架构测试、PHPStan。`phpstan.neon` 只排除 `SpinYarnClient`（CI 无 spinyarn 扩展）；level 7 已覆盖 `app/`、`scripts/`、`bin/`，新增文件必须保持零告警。
 
@@ -103,10 +104,11 @@ php vendor/bin/pest --filter=TestName
 ## 边缘 WAF / 统计（submodule）
 
 - WAF 入口在 `docker/nginx/default.conf` 的 `access_by_lua_file` 等；http 级指令在 `OpenLiteWaf/nginx/nginx.conf`（shared dict、`init_by_lua`）。容器镜像是 `openresty/openresty:1.27.1.2-alpine`，不是 stock nginx。
-- 路径形态的探测规则（`.php`、`/.git/`、敏感文件扩展名）必须限定 `uri` / `path`；放宽到 body / UA 会封正常客户端。接收任意文本的端点做 body 豁免：log（URI / UA 仍匹配）。body 只扫前 64KB，`Content-Length > 2MB` 跳过（chunked 仍扫）；`/{version}/raw/{id}/{filename}` 通过 `is_raw_file_request` 绕过扩展名规则。
+- 路径形态的探测规则（`.php`、`/.git/`、敏感文件扩展名）必须限定 `uri` / `path`；放宽到 body / UA 会封正常客户端。接收任意文本的端点做 body 豁免：log（URI / UA 仍匹配）。body 只扫前 64KB，`Content-Length > 2MB` 跳过（chunked 仍扫）；`/{version}/raw/{id}/{filename}` 通过 `is_raw_file_request` 绕过扩展名规则。`/stats/collect` 按**精确 URI** 豁免 body（`body_exempt_exact`），不能放宽成前缀，否则 `/stats/collectXYZ` 会绕过 body 扫描。
 - CC 超限返回 429 + `Retry-After` 且不封 IP；特征命中返回 403，并按 `sig_strikes`（默认 3）累计才封。CC 阈值必须低于 nginx `limit_req`（30r/s），否则请求先被 503。
 - 封禁与计数 60s 快照，重启后恢复；`docker exec logshare-nginx nginx -s reload` 在本部署不可靠，改 Lua 后用 `docker restart logshare-nginx`。重启不能清误封，走带 `OPENLITEWAF_ADMIN_TOKEN` 的 `POST /security/unban`（未配置 token 或长度不足时 404 fail-closed）。
-- `OpenLiteStats` 记录通过请求，排除 `/security`、`/stats`；排除按路径段边界匹配，空 prefix 会关闭全站统计。热门端点聚合时模板化 ID，IP 脱敏，`OPTIONS` 不计。
+- `OpenLiteStats` 记录通过请求，排除 `/security`、`/stats`；排除按路径段边界匹配，空 prefix 会关闭全站统计。边缘指标按日聚合状态码 / 方法 / 延迟 / 机器人，热门端点按日聚合且超容量进 `other`；`OPTIONS` 不计，IP 脱敏。
+- `OpenLiteStats` 前端数据由 `/stats/collect` 接收，控制台把边缘请求与前端 PV 合并为总活动量，但 **UV 不相加**（边缘 IP 与匿名 visitor ID 是两套近似口径）。`/stats/sdk/` 由 nginx 静态目录提供版本化 SDK；compose 需挂载 `OpenLiteStats/sdk/dist`。
 
 ## CI / 发布
 

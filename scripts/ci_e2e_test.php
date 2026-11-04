@@ -318,6 +318,59 @@ if ($testWaf) {
         }
     });
 
+    runCheck('前端统计 SDK 版本化文件可加载', function () use ($baseUrl) {
+        $res = httpRequest('GET', "{$baseUrl}/stats/sdk/1.3.0/openlitestats.min.js");
+        if ($res['status'] !== 200) {
+            throw new RuntimeException("SDK 文件不可达: {$res['status']}");
+        }
+        if (stripos($res['headers'], 'Content-Type: application/javascript') === false) {
+            throw new RuntimeException("SDK 文件 MIME 错误: {$res['headers']}");
+        }
+        if (strpos($res['body'], 'OpenLiteStats') === false) {
+            throw new RuntimeException('SDK 文件内容异常');
+        }
+    });
+
+    runCheck('前端统计采集端点 POST /stats/collect 正常接收', function () use ($baseUrl) {
+        $payload = (string) json_encode([
+            'v' => 1,
+            'events' => [[
+                'type' => 'pageview',
+                'site' => 'ci',
+                'vid' => 'ci-visitor-0001',
+                'sid' => 'ci-session-0001',
+                'path' => '/ci-e2e',
+                'dev' => 'desktop',
+                'lang' => 'zh-CN',
+                'ts' => time(),
+            ]],
+        ]);
+        $res = httpRequest('POST', "{$baseUrl}/stats/collect", ['Content-Type' => 'text/plain;charset=UTF-8'], $payload);
+        if ($res['status'] !== 204) {
+            throw new RuntimeException("采集端点未返回 204: {$res['status']} {$res['body']}");
+        }
+        if (stripos($res['headers'], 'Access-Control-Allow-Origin: *') === false) {
+            throw new RuntimeException("采集端点缺少 CORS 头: {$res['headers']}");
+        }
+    });
+
+    runCheck('前端统计采集端点拒绝非法 JSON', function () use ($baseUrl) {
+        $res = httpRequest('POST', "{$baseUrl}/stats/collect", ['Content-Type' => 'text/plain;charset=UTF-8'], '{bad json');
+        if ($res['status'] !== 400) {
+            throw new RuntimeException("非法 JSON 未被拒绝: {$res['status']}");
+        }
+    });
+
+    runCheck('前端统计采集预检 OPTIONS 返回 204', function () use ($baseUrl) {
+        $res = httpRequest('OPTIONS', "{$baseUrl}/stats/collect", [
+            'Origin' => 'https://docs.example.com',
+            'Access-Control-Request-Method' => 'POST',
+        ]);
+        if ($res['status'] !== 204) {
+            throw new RuntimeException("预检未返回 204: {$res['status']}");
+        }
+    });
+
     runCheck('OpenLiteWaf 白名单豁免验证 (带报错异常的日志 POST 放行)', function () use ($baseUrl) {
         $payload = (string) json_encode([
             'files' => [

@@ -28,6 +28,7 @@ services:
       - ../OpenLiteWaf/data:/data/openlitewaf
       # OpenLiteStats：站点访问统计，详见 OpenLiteStats/README.md
       - ../OpenLiteStats/lua:/usr/local/openresty/nginx/lstats:ro
+      - ../OpenLiteStats/sdk/dist:/usr/local/openresty/nginx/lstats-sdk:ro
       - ../OpenLiteStats/data:/data/openlitestats
       - ./certs:/etc/letsencrypt:ro
       - ./acme:/var/www/acme:ro
