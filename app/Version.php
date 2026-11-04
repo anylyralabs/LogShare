@@ -7,6 +7,6 @@ namespace App;
  */
 final class Version
 {
-    public const VERSION = '1.8.8_hotfix.1';
+    public const VERSION = '1.8.9';
 }
 

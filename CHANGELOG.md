@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.8.9 — 2026-11-04
+
+### 新增
+
+- **前端统计 SDK**：OpenLiteStats 升级到 1.3.0，新增 Vue 3 CSR/SSG SDK、Web Vitals 与前端错误采集；完成 `pnpm typecheck`、`pnpm test` 与 `pnpm build`，版本化产物位于 `OpenLiteStats/sdk/dist/1.3.0/`。
+- **前端采集端点**：新增 `POST /stats/collect`，支持 CORS、OPTIONS 预检与非法 JSON 拒绝；nginx 对 `/stats/collect` 做精确 URI 的 body 豁免，避免放宽成前缀。
+- **SDK 静态分发**：新增 `/stats/sdk/<version>/openlitestats.min.js`，由 nginx 直接提供带缓存头的版本化文件；compose 挂载 `OpenLiteStats/sdk/dist`。
+- **边缘统计增强**：OpenLiteStats 1.3.0 增加状态码 / 方法 / 延迟 / 机器人日聚合、热门端点 `other` 聚合、边缘独立 IP 展示，并与前端 PV 合并为总活动量（UV 不相加）。
+
+### 变更
+
+- **OpenLiteWaf 1.3.1**：更新 submodule 指针，加入前端采集端点的精确 body 豁免。
+- **E2E**：新增 SDK 文件加载、`/stats/collect` 正常接收、非法 JSON 与 OPTIONS 预检用例。
+
 ## 1.8.8_hotfix.1 — 2026-11-02
 
 ### 安全
