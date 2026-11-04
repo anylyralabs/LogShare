@@ -14,6 +14,15 @@ $baseUrl = rtrim(is_string($options['base-url'] ?? null) ? $options['base-url'] 
 $testWaf = isset($options['waf-test']);
 $testLargeFile = isset($options['large-file']);
 
+$sdkVersion = '1.3.0';
+$statsLua = __DIR__ . '/../OpenLiteStats/lua/openlitestats.lua';
+if (is_file($statsLua)) {
+    $content = file_get_contents($statsLua);
+    if (is_string($content) && preg_match('/_VERSION\s*=\s*"([^"]+)"/', $content, $m)) {
+        $sdkVersion = $m[1];
+    }
+}
+
 echo "=== 开始 LogShare 真实环境端到端测试 ===\n";
 echo "目标地址: {$baseUrl}\n";
 echo "WAF/网关测试模式: " . ($testWaf ? "已启用" : "未启用") . "\n";
@@ -318,8 +327,8 @@ if ($testWaf) {
         }
     });
 
-    runCheck('前端统计 SDK 版本化文件可加载', function () use ($baseUrl) {
-        $res = httpRequest('GET', "{$baseUrl}/stats/sdk/1.3.0/openlitestats.min.js");
+    runCheck('前端统计 SDK 版本化文件可加载', function () use ($baseUrl, $sdkVersion) {
+        $res = httpRequest('GET', "{$baseUrl}/stats/sdk/{$sdkVersion}/openlitestats.min.js");
         if ($res['status'] !== 200) {
             throw new RuntimeException("SDK 文件不可达: {$res['status']}");
         }

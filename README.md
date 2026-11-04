@@ -44,7 +44,7 @@
 | 缓存 | Redis 7.4（可选），只用于读缓存 |
 | 日志解析 | `aternos/codex-minecraft` ^5.1、`aternos/codex-hytale` ^2.0 |
 | 反混淆 | SpinYarn PHP 扩展（可选，Docker 镜像内编译） |
-| 边缘层 | OpenResty 1.27 + OpenLiteWaf + OpenLiteStats（git submodule） |
+| 边缘层 | OpenResty 1.27 + OpenLiteWaf + OpenLiteStats（边缘请求 + 前端 SDK 统计，git submodule） |
 | 测试与静态分析 | Pest 3、PHPStan 2（level 7）、PHPUnit 11 兼容配置 |
 
 ## 目录结构
@@ -78,7 +78,7 @@ LogShare/
 │   └── nginx/default.conf      # TLS、反向代理、WAF/统计入口
 ├── mappings/                   # Yarn（*.tiny.gz）与 Vanilla（vanilla/*.txt）映射
 ├── OpenLiteWaf/                # 边缘 WAF（独立仓库 submodule）
-├── OpenLiteStats/              # 访问统计（独立仓库 submodule）
+├── OpenLiteStats/              # 边缘 + 前端 SDK 访问统计（独立仓库 submodule）
 ├── scripts/                    # 迁移、事件生成、映射下载、端到端测试
 ├── tests/                      # Pest 单元 / 集成 / 架构测试
 └── runtime/                    # 日志、注解缓存、安全密钥（运行期生成）
